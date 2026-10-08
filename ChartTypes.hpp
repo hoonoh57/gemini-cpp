@@ -53,6 +53,20 @@ struct ProgramTradeRequestPacket {
     wchar_t code[16];
     uint32_t count;            // 요청 건수 (예: 60건)
 };
+
+#pragma pack(push, 1)
+struct SectorRankingItem {
+    wchar_t code[16];          // 업종코드
+    wchar_t name[32];          // 업종명
+    float curIndex;            // 현재지수
+    float diff;                // 대비
+    float diffRate;            // 등락률
+    uint64_t volume;           // 거래량(천주)
+    uint64_t amount;           // 거래대금(백만)
+    uint32_t upCount;          // 상승종목수
+    uint32_t downCount;        // 하락종목수
+};
+#pragma pack(pop)
 #pragma pack(pop)
 #pragma pack(pop)
 #pragma pack(pop)

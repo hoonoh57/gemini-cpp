@@ -469,6 +469,104 @@ bool RequestProgramTrade(const std::wstring& code, uint32_t reqCount, std::vecto
     return true;
 }
 
+// CpSysDib.CpSvr7043 업종별 시세 및 등락 랭킹 다운로드 (Cybos 배치 전담)
+bool RequestSectorRanking(std::vector<SectorRankingItem>& outItems) {
+    outItems.clear();
+    CLSID clsid;
+    if (FAILED(CLSIDFromProgID(L"CpSysDib.CpSvr7043", &clsid))) return false;
+
+    IDispatch* pSec = nullptr;
+    if (FAILED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pSec))) return false;
+
+    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
+    OLECHAR* nameSetInput = (OLECHAR*)L"SetInputValue";
+    OLECHAR* nameReq = (OLECHAR*)L"BlockRequest";
+    OLECHAR* nameGetHdr = (OLECHAR*)L"GetHeaderValue";
+    OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
+
+    pSec->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
+    pSec->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
+    pSec->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
+    pSec->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
+
+    auto SetInput = [pSec, dispidSetInputValue](int type, const VARIANT& val) {
+        VARIANT argType; VariantInit(&argType); argType.vt = VT_I4; argType.lVal = type;
+        VARIANT args[2] = { val, argType };
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        pSec->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    };
+
+    // 0: 시장구분 ('1': 거래소, '2': 코스닥) -> '1' 기본
+    {
+        VARIANT vGubun; VariantInit(&vGubun); vGubun.vt = VT_UI1; vGubun.bVal = '1';
+        SetInput(0, vGubun);
+    }
+    // 1: 정렬구분 ('1': 상승률순, '2': 하락률순) -> '1' 기본
+    {
+        VARIANT vSort; VariantInit(&vSort); vSort.vt = VT_UI1; vSort.bVal = '1';
+        SetInput(1, vSort);
+    }
+
+    // BlockRequest()
+    {
+        DISPPARAMS p{ nullptr, nullptr, 0, 0 };
+        pSec->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    }
+
+    // GetHeaderValue(0): 수신 건수
+    long count = 0;
+    {
+        VARIANT arg; VariantInit(&arg); arg.vt = VT_I4; arg.lVal = 0;
+        DISPPARAMS p{ &arg, nullptr, 1, 0 };
+        VARIANT res; VariantInit(&res);
+        pSec->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &res, nullptr, nullptr);
+        if (res.vt == VT_I4) count = res.lVal;
+        VariantClear(&res);
+    }
+
+    auto GetData = [pSec, dispidGetDataValue](int fieldIdx, int row) -> VARIANT {
+        VARIANT args[2];
+        VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = row;
+        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = fieldIdx;
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        VARIANT ret; VariantInit(&ret);
+        pSec->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
+        return ret;
+    };
+
+    for (int r = 0; r < count; ++r) {
+        SectorRankingItem item{};
+        VARIANT vCode = GetData(0, r);       // 업종코드
+        VARIANT vName = GetData(1, r);       // 업종명
+        VARIANT vCur = GetData(2, r);        // 현재지수
+        VARIANT vDiff = GetData(3, r);       // 대비
+        VARIANT vRate = GetData(4, r);       // 등락률
+        VARIANT vVol = GetData(5, r);        // 거래량(천주)
+        VARIANT vAmt = GetData(6, r);        // 거래대금(백만)
+        VARIANT vUp = GetData(7, r);         // 상승종목수
+        VARIANT vDown = GetData(9, r);       // 하락종목수
+
+        if (vCode.vt == VT_BSTR && vCode.bstrVal) wcsncpy_s(item.code, sizeof(item.code)/sizeof(wchar_t), vCode.bstrVal, _TRUNCATE);
+        if (vName.vt == VT_BSTR && vName.bstrVal) wcsncpy_s(item.name, sizeof(item.name)/sizeof(wchar_t), vName.bstrVal, _TRUNCATE);
+        item.curIndex = (vCur.vt == VT_R4) ? vCur.fltVal : (float)vCur.dblVal;
+        item.diff = (vDiff.vt == VT_R4) ? vDiff.fltVal : (float)vDiff.dblVal;
+        item.diffRate = (vRate.vt == VT_R4) ? vRate.fltVal : (float)vRate.dblVal;
+        item.volume = (uint64_t)vVol.lVal;
+        item.amount = (uint64_t)vAmt.lVal;
+        item.upCount = (uint32_t)vUp.lVal;
+        item.downCount = (uint32_t)vDown.lVal;
+
+        VariantClear(&vCode); VariantClear(&vName); VariantClear(&vCur);
+        VariantClear(&vDiff); VariantClear(&vRate); VariantClear(&vVol);
+        VariantClear(&vAmt); VariantClear(&vUp); VariantClear(&vDown);
+
+        outItems.push_back(item);
+    }
+
+    pSec->Release();
+    return true;
+}
+
 int wmain(int argc, wchar_t* argv[]) {
     CoInitialize(nullptr);
     StartRealPipeServer();
