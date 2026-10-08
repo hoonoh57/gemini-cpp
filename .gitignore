@@ -1,0 +1,19 @@
+﻿# Build outputs
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# Binary data & caches
+*.bin
+cybos_master_data.bin
+
+# User/Runtime configs
+strategy_settings_*.json
+kiwoom_master_workspace.json
+kiwoom_workspace.json
+
+# VS / Temp files
+.vs/
+*.log
+kiwoom_system_trading_workspace.json
