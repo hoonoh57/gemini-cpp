@@ -163,6 +163,17 @@ public:
         return m;
     }
 
+        void OnReceiveRealTick(const RealTickPacket& tick) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_candleStore.find(tick.code);
+        if (it != m_candleStore.end() && !it->second.empty()) {
+            auto& last = it->second.back();
+            last.close = tick.price;
+            if (tick.price > last.high) last.high = tick.price;
+            if (tick.price < last.low) last.low = tick.price;
+            last.volume += tick.volume;
+        }
+    }
     std::vector<Candle> GetCandles(const std::wstring& code) {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_candleStore.find(code);

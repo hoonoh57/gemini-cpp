@@ -261,3 +261,12 @@ public:
         }
     }
 };
+
+#pragma pack(push, 1)
+struct RealTickPacket {
+    wchar_t code[16];
+    float price;
+    uint64_t volume;
+    wchar_t time[16];
+};
+#pragma pack(pop)
