@@ -119,6 +119,106 @@ public:
     }
 };
 
+const wchar_t* KIWOOM_CHEJAN_PIPE = L"\\\\.\\pipe\\GeminiKiwoomChejanPipe";
+HANDLE g_hChejanPipe = INVALID_HANDLE_VALUE;
+std::atomic<bool> g_chejanConnected{false};
+
+void StartChejanPipeServer() {
+    std::thread([]() {
+        while (g_running) {
+            HANDLE hPipe = CreateNamedPipeW(
+                KIWOOM_CHEJAN_PIPE,
+                PIPE_ACCESS_OUTBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1, 4096, 4096, 0, nullptr
+            );
+
+            if (hPipe == INVALID_HANDLE_VALUE) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+
+            if (ConnectNamedPipe(hPipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED) {
+                g_hChejanPipe = hPipe;
+                g_chejanConnected = true;
+                std::wcout << L"[KIWOOM-32] Chejan real-time pipe connected to 64-bit engine." << std::endl;
+
+                while (g_chejanConnected && g_running) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+            }
+
+            g_chejanConnected = false;
+            CloseHandle(hPipe);
+            g_hChejanPipe = INVALID_HANDLE_VALUE;
+        }
+    }).detach();
+}
+
+void BroadcastChejan(const KiwoomChejanPacket& packet) {
+    if (!g_chejanConnected || g_hChejanPipe == INVALID_HANDLE_VALUE) return;
+
+    PipeHeader hdr{};
+    memcpy(hdr.magic, "GBRG", 4);
+    hdr.msgType = 11; // KIWOOM_CHEJAN
+    hdr.payloadLen = sizeof(KiwoomChejanPacket);
+
+    DWORD written = 0;
+    if (!WriteFile(g_hChejanPipe, &hdr, sizeof(hdr), &written, nullptr) ||
+        !WriteFile(g_hChejanPipe, &packet, sizeof(packet), &written, nullptr)) {
+        g_chejanConnected = false;
+    }
+}
+const wchar_t* KIWOOM_COND_PIPE = L"\\\\.\\pipe\\GeminiKiwoomConditionPipe";
+HANDLE g_hCondPipe = INVALID_HANDLE_VALUE;
+std::atomic<bool> g_condConnected{false};
+
+void StartConditionPipeServer() {
+    std::thread([]() {
+        while (g_running) {
+            HANDLE hPipe = CreateNamedPipeW(
+                KIWOOM_COND_PIPE,
+                PIPE_ACCESS_OUTBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1, 4096, 4096, 0, nullptr
+            );
+
+            if (hPipe == INVALID_HANDLE_VALUE) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+
+            if (ConnectNamedPipe(hPipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED) {
+                g_hCondPipe = hPipe;
+                g_condConnected = true;
+                std::wcout << L"[KIWOOM-32] Condition search real-time pipe connected to 64-bit engine." << std::endl;
+
+                while (g_condConnected && g_running) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+            }
+
+            g_condConnected = false;
+            CloseHandle(hPipe);
+            g_hCondPipe = INVALID_HANDLE_VALUE;
+        }
+    }).detach();
+}
+
+void BroadcastConditionReal(const KiwoomConditionRealPacket& packet) {
+    if (!g_condConnected || g_hCondPipe == INVALID_HANDLE_VALUE) return;
+
+    PipeHeader hdr{};
+    memcpy(hdr.magic, "GBRG", 4);
+    hdr.msgType = 21; // KIWOOM_REAL_CONDITION
+    hdr.payloadLen = sizeof(KiwoomConditionRealPacket);
+
+    DWORD written = 0;
+    if (!WriteFile(g_hCondPipe, &hdr, sizeof(hdr), &written, nullptr) ||
+        !WriteFile(g_hCondPipe, &packet, sizeof(packet), &written, nullptr)) {
+        g_condConnected = false;
+    }
+}
 CKiwoomBroker g_broker;
 
 void RunOrderPipeServer() {
@@ -174,6 +274,8 @@ int wmain(int argc, wchar_t* argv[]) {
     }
 
     RunOrderPipeServer();
+    StartChejanPipeServer();
+    StartConditionPipeServer();
 
     // 메시지 펌프 루프 (OCX 이벤트 및 통신 처리)
     MSG msg;
