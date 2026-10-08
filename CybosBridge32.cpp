@@ -389,7 +389,7 @@ bool RequestProgramTrade(const std::wstring& code, uint32_t reqCount, std::vecto
     OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
 
     pPgm->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
-    pPgm->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidReq);
+    pPgm->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
     pPgm->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
     pPgm->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
 
