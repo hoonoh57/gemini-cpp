@@ -2,6 +2,7 @@
 #include "Common.hpp"
 #include "ChartTypes.hpp"
 #include "CentralDataManager.hpp"
+#include "LayoutPersistence.hpp"
 #include "StrategyConditionDlg.hpp"
 #include "FormulaManagerDlg.hpp"
 
@@ -467,6 +468,35 @@ public:
         if (sync_tf) { for (auto& s : slots) zoom(s); }
         else zoom(slots[active_slot]);
         InvalidateRect(hwnd, nullptr, FALSE);
+    }
+
+    void SaveLayoutConfig() {
+        LayoutPersistData d;
+        d.layout_mode = layout_mode;
+        for (const auto& s : slots) {
+            SlotPersistData sp;
+            sp.code = s.code;
+            sp.tf_type = tf_type;
+            sp.tf_unit = tf_unit;
+            sp.visible_bars = s.visible_bars;
+            sp.scroll_offset = s.scroll_offset;
+            d.slots.push_back(sp);
+        }
+        LayoutPersistence::SaveToFile(L"layout_config.json", d);
+        std::wcout << L"[PERSIST] Layout configuration saved to layout_config.json" << std::endl;
+    }
+
+    void LoadLayoutConfig() {
+        LayoutPersistData d;
+        if (LayoutPersistence::LoadFromFile(L"layout_config.json", d)) {
+            layout_mode = d.layout_mode;
+            for (size_t i = 0; i < d.slots.size() && i < slots.size(); ++i) {
+                slots[i].code = d.slots[i].code;
+                slots[i].visible_bars = d.slots[i].visible_bars;
+                slots[i].scroll_offset = d.slots[i].scroll_offset;
+            }
+            std::wcout << L"[PERSIST] Layout configuration restored from layout_config.json" << std::endl;
+        }
     }
 };
 
