@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <functional>
 #include <unordered_map>
 #include <mutex>
 #include <iostream>
@@ -29,6 +30,13 @@ struct BridgeCandle {
 #pragma pack(pop)
 
 class CentralDataManager {
+public:
+    using TickNotifyCallback = std::function<void(const std::wstring&)>;
+    TickNotifyCallback m_tickCallback = nullptr;
+
+    void SetTickCallback(TickNotifyCallback cb) {
+        m_tickCallback = cb;
+    }
 private:
     std::mutex m_mutex;
     std::unordered_map<std::wstring, StockMaster> m_masters;
@@ -172,6 +180,9 @@ public:
             if (tick.price > last.high) last.high = tick.price;
             if (tick.price < last.low) last.low = tick.price;
             last.volume += tick.volume;
+        }
+        if (m_tickCallback) {
+            m_tickCallback(tick.code);
         }
     }
     std::vector<Candle> GetCandles(const std::wstring& code) {
