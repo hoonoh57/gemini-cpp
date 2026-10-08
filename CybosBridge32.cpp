@@ -6,6 +6,8 @@
 #include <string>
 #include <sstream>
 #include <comdef.h>
+#include <thread>
+#include <atomic>
 
 #pragma pack(push, 1)
 struct PipeHeader {
@@ -220,8 +222,60 @@ bool FetchCybosCandles(const std::wstring& code, char tfType, int tfUnit, int co
     return true;
 }
 
+const wchar_t* REAL_PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgeRealPipe";
+HANDLE g_hRealPipe = INVALID_HANDLE_VALUE;
+std::atomic<bool> g_realPipeConnected{false};
+
+void StartRealPipeServer() {
+    std::thread([]() {
+        while (true) {
+            HANDLE hPipe = CreateNamedPipeW(
+                REAL_PIPE_NAME,
+                PIPE_ACCESS_OUTBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1, 4096, 4096, 0, nullptr
+            );
+
+            if (hPipe == INVALID_HANDLE_VALUE) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+
+            if (ConnectNamedPipe(hPipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED) {
+                g_hRealPipe = hPipe;
+                g_realPipeConnected = true;
+                std::wcout << L"[BRIDGE-32] Real-time pipe connected to 64-bit engine." << std::endl;
+
+                while (g_realPipeConnected) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+            }
+
+            g_realPipeConnected = false;
+            CloseHandle(hPipe);
+            g_hRealPipe = INVALID_HANDLE_VALUE;
+        }
+    }).detach();
+}
+
+void BroadcastRealTick(const RealTickPacket& tick) {
+    if (!g_realPipeConnected || g_hRealPipe == INVALID_HANDLE_VALUE) return;
+
+    PipeHeader hdr{};
+    memcpy(hdr.magic, "GBRG", 4);
+    hdr.msgType = 3; // REAL_TICK
+    hdr.payloadLen = sizeof(RealTickPacket);
+
+    DWORD written = 0;
+    if (!WriteFile(g_hRealPipe, &hdr, sizeof(hdr), &written, nullptr) ||
+        !WriteFile(g_hRealPipe, &tick, sizeof(tick), &written, nullptr)) {
+        g_realPipeConnected = false;
+    }
+}
+
 int wmain(int argc, wchar_t* argv[]) {
     CoInitialize(nullptr);
+    StartRealPipeServer();
     std::wcout << L"[BRIDGE-32] Gemini 32-bit Cybos IPC Bridge Broker Active." << std::endl;
 
     HANDLE hPipe = CreateNamedPipeW(
