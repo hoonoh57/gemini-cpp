@@ -1,4 +1,6 @@
-﻿#pragma pack(push, 1)
+﻿#include <cstdint>
+#include <string>
+#pragma pack(push, 1)
 struct PipeHeader {
     char magic[4];       // 'G','B','R','G'
     uint32_t msgType;    // 1: REQ, 2: RES_CANDLES, 3: REAL_TICK, 11: CHEJAN, 99: ERROR
@@ -15,6 +17,21 @@ struct BridgeCandle {
     uint64_t volume;
     float ofi;
 };
+
+#pragma pack(push, 1)
+struct MarketEyeItem {
+    wchar_t code[16];
+    wchar_t name[32];
+    float curPrice;
+    float diff;
+    float diffRate;
+    uint64_t volume;
+    float askPrice;
+    float bidPrice;
+    int64_t instNetBuy;    // 기관 순매수량
+    int64_t foreignNetBuy; // 외인 순매수량
+};
+#pragma pack(pop)
 #pragma pack(pop)
 
 #pragma once

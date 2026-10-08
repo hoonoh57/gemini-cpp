@@ -1,4 +1,5 @@
-﻿#define WIN32_LEAN_AND_MEAN
+﻿#include "ChartTypes.hpp"
+#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <iostream>
@@ -9,31 +10,7 @@
 #include <thread>
 #include <atomic>
 
-#pragma pack(push, 1)
-struct PipeHeader {
-    char magic[4];       // 'G','B','R','G'
-    uint32_t msgType;    // 1: REQ_CANDLES, 2: RES_CANDLES, 3: REAL_TICK, 99: ERROR
-    uint32_t payloadLen;
-};
 
-struct BridgeCandle {
-    wchar_t date[16];
-    wchar_t time[16];
-    float open;
-    float high;
-    float low;
-    float close;
-    uint64_t volume;
-    float ofi;
-};
-
-struct RealTickPacket {
-    wchar_t code[16];
-    float price;
-    uint64_t volume;
-    wchar_t time[16];
-};
-#pragma pack(pop)
 
 const wchar_t* PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgePipe";
 
@@ -271,6 +248,129 @@ void BroadcastRealTick(const RealTickPacket& tick) {
         !WriteFile(g_hRealPipe, &tick, sizeof(tick), &written, nullptr)) {
         g_realPipeConnected = false;
     }
+}
+
+// CpSysDib.MarketEye 다중 종목 배치 데이터 다운로드 (Cybos 전담)
+bool RequestMarketEye(const std::vector<std::wstring>& codes, std::vector<MarketEyeItem>& outItems) {
+    outItems.clear();
+    if (codes.empty()) return false;
+
+    CLSID clsid;
+    if (FAILED(CLSIDFromProgID(L"CpSysDib.MarketEye", &clsid))) return false;
+
+    IDispatch* pEye = nullptr;
+    if (FAILED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pEye))) return false;
+
+    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
+    OLECHAR* nameSetInput = (OLECHAR*)L"SetInputValue";
+    OLECHAR* nameReq = (OLECHAR*)L"BlockRequest";
+    OLECHAR* nameGetHdr = (OLECHAR*)L"GetHeaderValue";
+    OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
+
+    pEye->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
+    pEye->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
+    pEye->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
+    pEye->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
+
+    // 필드 정의: 0(종목코드), 4(현재가), 5(전일대비), 6(등락률), 10(거래량), 7(매도호가), 8(매수호가), 17(종목명), 20(기관순매수), 21(외인순매수)
+    long fields[] = { 0, 4, 5, 6, 10, 7, 8, 17, 20, 21 };
+    int fieldCount = sizeof(fields) / sizeof(fields[0]);
+
+    SAFEARRAYBOUND sabField{ (ULONG)fieldCount, 0 };
+    SAFEARRAY* psaFields = SafeArrayCreate(VT_VARIANT, 1, &sabField);
+    for (LONG i = 0; i < fieldCount; ++i) {
+        VARIANT v; VariantInit(&v); v.vt = VT_I4; v.lVal = fields[i];
+        SafeArrayPutElement(psaFields, &i, &v);
+    }
+
+    // SetInputValue(0, fields)
+    {
+        VARIANT a0; VariantInit(&a0); a0.vt = VT_I4; a0.lVal = 0;
+        VARIANT a1; VariantInit(&a1); a1.vt = VT_ARRAY | VT_VARIANT; a1.parray = psaFields;
+        VARIANT args[2] = { a1, a0 };
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        pEye->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    }
+    SafeArrayDestroy(psaFields);
+
+    // 종목 배열 생성 및 SetInputValue(1, codes)
+    SAFEARRAYBOUND sabCodes{ (ULONG)codes.size(), 0 };
+    SAFEARRAY* psaCodes = SafeArrayCreate(VT_VARIANT, 1, &sabCodes);
+    for (LONG i = 0; i < (LONG)codes.size(); ++i) {
+        VARIANT v; VariantInit(&v); v.vt = VT_BSTR; v.bstrVal = SysAllocString(codes[i].c_str());
+        SafeArrayPutElement(psaCodes, &i, &v);
+        VariantClear(&v);
+    }
+
+    {
+        VARIANT a0; VariantInit(&a0); a0.vt = VT_I4; a0.lVal = 1;
+        VARIANT a1; VariantInit(&a1); a1.vt = VT_ARRAY | VT_VARIANT; a1.parray = psaCodes;
+        VARIANT args[2] = { a1, a0 };
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        pEye->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    }
+    SafeArrayDestroy(psaCodes);
+
+    // BlockRequest()
+    {
+        DISPPARAMS p{ nullptr, nullptr, 0, 0 };
+        pEye->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    }
+
+    // GetHeaderValue(2): 수신 데이터 개수
+    long count = 0;
+    {
+        VARIANT arg; VariantInit(&arg); arg.vt = VT_I4; arg.lVal = 2;
+        DISPPARAMS p{ &arg, nullptr, 1, 0 };
+        VARIANT res; VariantInit(&res);
+        pEye->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &res, nullptr, nullptr);
+        if (res.vt == VT_I4) count = res.lVal;
+        VariantClear(&res);
+    }
+
+    auto GetData = [pEye, dispidGetDataValue](int fieldIdx, int row) -> VARIANT {
+        VARIANT args[2];
+        VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = row;      // 행
+        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = fieldIdx; // 열
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        VARIANT ret; VariantInit(&ret);
+        pEye->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
+        return ret;
+    };
+
+    for (int r = 0; r < count; ++r) {
+        MarketEyeItem item{};
+        VARIANT vCode = GetData(0, r);
+        VARIANT vPrice = GetData(1, r);
+        VARIANT vDiff = GetData(2, r);
+        VARIANT vRate = GetData(3, r);
+        VARIANT vVol = GetData(4, r);
+        VARIANT vAsk = GetData(5, r);
+        VARIANT vBid = GetData(6, r);
+        VARIANT vName = GetData(7, r);
+        VARIANT vInst = GetData(8, r);
+        VARIANT vFrgn = GetData(9, r);
+
+        if (vCode.vt == VT_BSTR && vCode.bstrVal) wcsncpy_s(item.code, sizeof(item.code) / sizeof(wchar_t), vCode.bstrVal, _TRUNCATE);
+        if (vName.vt == VT_BSTR && vName.bstrVal) wcsncpy_s(item.name, sizeof(item.name) / sizeof(wchar_t), vName.bstrVal, _TRUNCATE);
+        item.curPrice = (float)vPrice.lVal;
+        item.diff = (float)vDiff.lVal;
+        item.diffRate = (vRate.vt == VT_R4) ? vRate.fltVal : (float)vRate.dblVal;
+        item.volume = (uint64_t)vVol.lVal;
+        item.askPrice = (float)vAsk.lVal;
+        item.bidPrice = (float)vBid.lVal;
+        item.instNetBuy = (int64_t)vInst.lVal;
+        item.foreignNetBuy = (int64_t)vFrgn.lVal;
+
+        VariantClear(&vCode); VariantClear(&vPrice); VariantClear(&vDiff);
+        VariantClear(&vRate); VariantClear(&vVol); VariantClear(&vAsk);
+        VariantClear(&vBid); VariantClear(&vName); VariantClear(&vInst); VariantClear(&vFrgn);
+
+        outItems.push_back(item);
+    }
+
+    pEye->Release();
+    return true;
 }
 
 int wmain(int argc, wchar_t* argv[]) {
