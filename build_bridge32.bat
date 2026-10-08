@@ -2,6 +2,9 @@
 chcp 65001 > nul
 setlocal
 
+echo [BUILD-32] Stopping running instances...
+taskkill /F /IM CybosBridge32.exe > nul 2>&1
+
 echo [BUILD-32] Loading MSVC x86 (32-bit) Environment...
 if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars32.bat" (
     call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars32.bat"
