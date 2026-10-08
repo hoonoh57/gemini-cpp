@@ -33,6 +33,30 @@ struct BridgeCandle {
 
 class CentralDataManager {
 public:
+    // 키움 Open API+ 전용 주문 전송 IPC (Strict Separation: Kiwoom handles trading)
+    long SendKiwoomOrder(const KiwoomOrderRequest& req) {
+        const wchar_t* ORDER_PIPE = L"\\\\.\\pipe\\GeminiKiwoomOrderPipe";
+        HANDLE hPipe = CreateFileW(
+            ORDER_PIPE,
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, OPEN_EXISTING, 0, nullptr
+        );
+
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            return -100; // 브릿지 미연결 (Fail-Fast)
+        }
+
+        DWORD written = 0, readBytes = 0;
+        long retCode = -1;
+
+        if (WriteFile(hPipe, &req, sizeof(req), &written, nullptr) && written == sizeof(req)) {
+            ReadFile(hPipe, &retCode, sizeof(retCode), &readBytes, nullptr);
+        }
+
+        CloseHandle(hPipe);
+        return retCode;
+    }
+public:
     using TickNotifyCallback = std::function<void(const std::wstring&)>;
     TickNotifyCallback m_tickCallback = nullptr;
 
