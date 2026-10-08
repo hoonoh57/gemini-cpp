@@ -270,3 +270,47 @@ struct RealTickPacket {
     wchar_t time[16];
 };
 #pragma pack(pop)
+
+// -------------------------------------------------------------
+// 키움 Open API+ 전담 패킷 규격 (주문 / 체결 / 실시간 조건검색)
+// -------------------------------------------------------------
+#pragma pack(push, 1)
+enum class KiwoomOrderType : uint8_t {
+    Buy = 1,       // 신규매수
+    Sell = 2,      // 신규매도
+    CancelBuy = 3, // 매수취소
+    CancelSell = 4,// 매도취소
+    ModifyBuy = 5, // 매수정정
+    ModifySell = 6 // 매도정정
+};
+
+struct KiwoomOrderRequest {
+    wchar_t accNo[16];      // 계좌번호
+    KiwoomOrderType orderType;
+    wchar_t code[16];       // 종목코드
+    int32_t qty;            // 수량
+    int32_t price;          // 가격 (시장가는 0)
+    wchar_t hogaType[4];    // 00: 지정가, 03: 시장가 등
+    wchar_t orgOrderNo[16]; // 원주문번호 (정정/취소 시)
+};
+
+struct KiwoomChejanPacket {
+    wchar_t accNo[16];
+    wchar_t orderNo[16];
+    wchar_t code[16];
+    wchar_t time[16];
+    wchar_t status[16];     // 접수, 체결, 취소 등
+    int32_t orderQty;
+    int32_t orderPrice;
+    int32_t filledQty;
+    int32_t filledPrice;
+    int32_t openQty;        // 미체결수량
+};
+
+struct KiwoomConditionRealPacket {
+    int32_t conditionIndex;
+    wchar_t conditionName[32];
+    wchar_t code[16];
+    char eventType;         // 'I': Insert(편입), 'D': Delete(이탈)
+};
+#pragma pack(pop)
