@@ -42,6 +42,43 @@ struct ChartSlotState {
 
 class ChartCoreEngine {
 public:
+        HWND hEditSymbol = nullptr;
+    WNDPROC origEditProc = nullptr;
+
+    static LRESULT CALLBACK SymbolEditSubclassProc(HWND hEdit, UINT msg, WPARAM wParam, LPARAM lParam) {
+        auto* pEngine = reinterpret_cast<ChartCoreEngine*>(GetWindowLongPtrW(hEdit, GWLP_USERDATA));
+        if (msg == WM_KEYDOWN && wParam == VK_RETURN) {
+            wchar_t buf[32]{};
+            GetWindowTextW(hEdit, buf, 32);
+            if (wcslen(buf) >= 6 && pEngine) {
+                pEngine->ChangeSlotSymbol(buf);
+            }
+            return 0;
+        }
+        if (pEngine && pEngine->origEditProc) {
+            return CallWindowProcW(pEngine->origEditProc, hEdit, msg, wParam, lParam);
+        }
+        return DefWindowProcW(hEdit, msg, wParam, lParam);
+    }
+
+    void ChangeSlotSymbol(const std::wstring& newCode) {
+        if (active_slot < 0 || active_slot >= (int)slots.size()) return;
+        
+        bool ok = CentralDataManager::Instance().RequestDataFromBridge(newCode, tf_type, tf_unit, 150);
+        
+        const auto& c = CentralDataManager::Instance().GetCandles(newCode);
+        if (!c.empty()) {
+            slots[active_slot].code = newCode;
+            for (auto& a : slots[active_slot].addons) {
+                a->OnUpdate(c);
+            }
+            std::wcout << L"[CHART] Successfully switched slot " << active_slot << L" to " << newCode << L" (Candles: " << c.size() << L")" << std::endl;
+        } else {
+            std::wcout << L"[CHART][ERROR] No candle data available for symbol: " << newCode << L". IPC Bridge response missing." << std::endl;
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+public:
     HWND hwnd = nullptr;
     ID2D1Factory* pD2D = nullptr;
     ID2D1HwndRenderTarget* pRT = nullptr;
@@ -82,6 +119,17 @@ public:
     int drag_start_offset = 0;
 
     void Init(HWND h) {
+        if (!hEditSymbol) {
+            hEditSymbol = CreateWindowExW(
+                WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_UPPERCASE,
+                240, 5, 75, 22,
+                hwnd, (HMENU)9001, GetModuleHandleW(nullptr), nullptr
+            );
+            origEditProc = (WNDPROC)SetWindowLongPtrW(hEditSymbol, GWLP_WNDPROC, (LONG_PTR)SymbolEditSubclassProc);
+            HFONT hFont = CreateFontW(14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"맑은 고딕");
+            SendMessageW(hEditSymbol, WM_SETFONT, (WPARAM)hFont, TRUE);
+        }
         hwnd = h;
         D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &pD2D);
         D2D1_STROKE_STYLE_PROPERTIES sp = D2D1::StrokeStyleProperties(
