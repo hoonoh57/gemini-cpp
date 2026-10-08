@@ -1,4 +1,23 @@
-﻿#pragma once
+﻿#pragma pack(push, 1)
+struct PipeHeader {
+    char magic[4];       // 'G','B','R','G'
+    uint32_t msgType;    // 1: REQ, 2: RES_CANDLES, 3: REAL_TICK, 11: CHEJAN, 99: ERROR
+    uint32_t payloadLen;
+};
+
+struct BridgeCandle {
+    wchar_t date[16];
+    wchar_t time[16];
+    float open;
+    float high;
+    float low;
+    float close;
+    uint64_t volume;
+    float ofi;
+};
+#pragma pack(pop)
+
+#pragma once
 #include "Common.hpp"
 
 struct Candle {
@@ -262,6 +281,8 @@ public:
     }
 };
 
+
+
 #pragma pack(push, 1)
 struct RealTickPacket {
     wchar_t code[16];
@@ -274,6 +295,8 @@ struct RealTickPacket {
 // -------------------------------------------------------------
 // 키움 Open API+ 전담 패킷 규격 (주문 / 체결 / 실시간 조건검색)
 // -------------------------------------------------------------
+
+
 #pragma pack(push, 1)
 enum class KiwoomOrderType : uint8_t {
     Buy = 1,       // 신규매수

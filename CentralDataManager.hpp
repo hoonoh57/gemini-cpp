@@ -12,24 +12,7 @@
 #include <iostream>
 #include "ChartTypes.hpp"
 
-#pragma pack(push, 1)
-struct PipeHeader {
-    char magic[4];       // 'G','B','R','G'
-    uint32_t msgType;    // 1: REQ_CANDLES, 2: RES_CANDLES, 99: ERROR
-    uint32_t payloadLen;
-};
 
-struct BridgeCandle {
-    wchar_t date[16];
-    wchar_t time[16];
-    float open;
-    float high;
-    float low;
-    float close;
-    uint64_t volume;
-    float ofi;
-};
-#pragma pack(pop)
 
 class CentralDataManager {
 public:
