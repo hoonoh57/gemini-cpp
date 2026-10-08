@@ -41,7 +41,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             g_Engine.pRT->Resize(D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top));
         }
         return 0;
-    case WM_DESTROY:
+        case WM_DESTROY:
+        g_Engine.SaveLayoutConfig();
         PostQuitMessage(0);
         return 0;
     }

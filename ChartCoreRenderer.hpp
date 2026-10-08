@@ -151,6 +151,7 @@ public:
         }
 
         CentralDataManager::Instance().LoadInitialData(L"cybos_master_data.bin", tf_type, tf_unit);
+        LoadLayoutConfig();
         for (auto& s : slots) {
             const auto& c = CentralDataManager::Instance().GetCandles(s.code);
             for (auto& a : s.addons) a->OnUpdate(c);
