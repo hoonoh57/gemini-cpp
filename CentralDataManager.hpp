@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <thread>
+#include <atomic>
 #include <unordered_map>
 #include <mutex>
 #include <iostream>
@@ -34,6 +36,53 @@ public:
     using TickNotifyCallback = std::function<void(const std::wstring&)>;
     TickNotifyCallback m_tickCallback = nullptr;
 
+        std::thread m_realListenerThread;
+    std::atomic<bool> m_stopRealListener{false};
+
+    void StartRealTimeListener() {
+        m_stopRealListener = false;
+        m_realListenerThread = std::thread([this]() {
+            const wchar_t* REAL_PIPE = L"\\\\.\\pipe\\GeminiBridgeRealPipe";
+            while (!m_stopRealListener) {
+                HANDLE hPipe = CreateFileW(
+                    REAL_PIPE,
+                    GENERIC_READ,
+                    0, nullptr, OPEN_EXISTING, 0, nullptr
+                );
+
+                if (hPipe == INVALID_HANDLE_VALUE) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+
+                while (!m_stopRealListener) {
+                    PipeHeader hdr{};
+                    DWORD readBytes = 0;
+                    if (!ReadFile(hPipe, &hdr, sizeof(hdr), &readBytes, nullptr) || readBytes != sizeof(hdr)) {
+                        break;
+                    }
+
+                    if (hdr.msgType == 3 && hdr.payloadLen == sizeof(RealTickPacket)) {
+                        RealTickPacket tick{};
+                        if (ReadFile(hPipe, &tick, sizeof(tick), &readBytes, nullptr) && readBytes == sizeof(tick)) {
+                            OnReceiveRealTick(tick);
+                        }
+                    } else {
+                        std::vector<char> dummy(hdr.payloadLen);
+                        ReadFile(hPipe, dummy.data(), hdr.payloadLen, &readBytes, nullptr);
+                    }
+                }
+                CloseHandle(hPipe);
+            }
+        });
+    }
+
+    void StopRealTimeListener() {
+        m_stopRealListener = true;
+        if (m_realListenerThread.joinable()) {
+            m_realListenerThread.detach();
+        }
+    }
     void SetTickCallback(TickNotifyCallback cb) {
         m_tickCallback = cb;
     }
