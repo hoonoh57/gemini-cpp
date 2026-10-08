@@ -31,6 +31,13 @@ struct MarketEyeItem {
     int64_t instNetBuy;    // 기관 순매수량
     int64_t foreignNetBuy; // 외인 순매수량
 };
+
+#pragma pack(push, 1)
+struct MarketEyeRequestPacket {
+    uint32_t count;
+    wchar_t codes[200][16]; // 최대 200종목 단위 배치 요청
+};
+#pragma pack(pop)
 #pragma pack(pop)
 #pragma pack(pop)
 
