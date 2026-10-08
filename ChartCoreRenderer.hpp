@@ -43,6 +43,9 @@ struct ChartSlotState {
 
 class ChartCoreEngine {
 public:
+    std::wstring status_msg = L"[READY] Standby";
+    bool status_is_error = false;
+public:
         HWND hEditSymbol = nullptr;
     WNDPROC origEditProc = nullptr;
 
@@ -62,20 +65,28 @@ public:
         return DefWindowProcW(hEdit, msg, wParam, lParam);
     }
 
-    void ChangeSlotSymbol(const std::wstring& newCode) {
+        void ChangeSlotSymbol(const std::wstring& newCode) {
         if (active_slot < 0 || active_slot >= (int)slots.size()) return;
         
+        status_msg = L"[REQ] Requesting " + newCode + L"...";
+        status_is_error = false;
+        InvalidateRect(hwnd, nullptr, FALSE);
+
         bool ok = CentralDataManager::Instance().RequestDataFromBridge(newCode, tf_type, tf_unit, 150);
-        
         const auto& c = CentralDataManager::Instance().GetCandles(newCode);
-        if (!c.empty()) {
+
+        if (ok && !c.empty()) {
             slots[active_slot].code = newCode;
             for (auto& a : slots[active_slot].addons) {
                 a->OnUpdate(c);
             }
-            std::wcout << L"[CHART] Successfully switched slot " << active_slot << L" to " << newCode << L" (Candles: " << c.size() << L")" << std::endl;
+            status_msg = L"[OK] " + newCode + L" (" + std::to_wstring(c.size()) + L" bars)";
+            status_is_error = false;
+            std::wcout << L"[CHART] Switched slot " << active_slot << L" to " << newCode << std::endl;
         } else {
-            std::wcout << L"[CHART][ERROR] No candle data available for symbol: " << newCode << L". IPC Bridge response missing." << std::endl;
+            status_msg = L"[FAIL] Bridge error for " + newCode;
+            status_is_error = true;
+            std::wcout << L"[CHART][ERROR] Bridge fetch failed for: " << newCode << std::endl;
         }
         InvalidateRect(hwnd, nullptr, FALSE);
     }
@@ -207,7 +218,13 @@ public:
 
     void DrawTopBar(float w, float h) {
         pRT->FillRectangle(D2D1::RectF(0, 0, w, h), bToolBarBg);
-        pRT->DrawLine(D2D1::Point2F(0, h), D2D1::Point2F(w, h), bGrid, 1.0f);
+                pRT->DrawLine(D2D1::Point2F(0, h), D2D1::Point2F(w, h), bGrid, 1.0f);
+
+        // State HUD (Fail-Fast 시각 피드백)
+        if (!status_msg.empty()) {
+            D2D1_RECT_F sRect = D2D1::RectF(w - 280, 5, w - 10, h - 5);
+            pRT->DrawText(status_msg.c_str(), (UINT32)status_msg.size(), pFSmall, sRect, status_is_error ? bRed : bGold);
+        }
 
         auto btn = [this](float x, float y, float bw, float bh, const wchar_t* txt, bool act) {
             D2D1_RECT_F r = D2D1::RectF(x, y, x + bw, y + bh);
