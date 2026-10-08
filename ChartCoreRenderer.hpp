@@ -1,4 +1,10 @@
 ﻿#pragma once
+#ifndef WM_USER_CHEJAN
+#define WM_USER_CHEJAN      (WM_USER + 102)
+#endif
+#ifndef WM_USER_CONDITION
+#define WM_USER_CONDITION   (WM_USER + 103)
+#endif
 #include "Common.hpp"
 #include "ChartTypes.hpp"
 #include "CentralDataManager.hpp"
@@ -164,6 +170,24 @@ public:
         CentralDataManager::Instance().LoadInitialData(L"cybos_master_data.bin", tf_type, tf_unit);
         LoadLayoutConfig();
         CentralDataManager::Instance().StartRealTimeListener();
+        // 키움 전담 트레이딩 & 조건검색 리스너 자동 기동
+        HWND targetHwnd = this->hwnd;
+        CentralDataManager::Instance().SetChejanCallback([targetHwnd](const KiwoomChejanPacket& p) {
+            std::wstring* pStatus = new std::wstring(
+                std::wstring(p.code) + L" " + p.status + L" " + 
+                std::to_wstring(p.filledQty) + L"주 @" + std::to_wstring(p.filledPrice)
+            );
+            PostMessage(targetHwnd, WM_USER_CHEJAN, (WPARAM)pStatus, 0);
+        });
+        CentralDataManager::Instance().StartChejanListener();
+
+        CentralDataManager::Instance().SetConditionCallback([targetHwnd](const KiwoomConditionRealPacket& p) {
+            std::wstring* pCond = new std::wstring(
+                std::wstring(p.conditionName) + L" [" + (p.eventType == 'I' ? L"편입" : L"이탈") + L"] " + p.code
+            );
+            PostMessage(targetHwnd, WM_USER_CONDITION, (WPARAM)pCond, 0);
+        });
+        CentralDataManager::Instance().StartConditionListener();
         CentralDataManager::Instance().SetTickCallback([this](const std::wstring& code) {
             for (const auto& s : slots) {
                 if (s.code == code) {
