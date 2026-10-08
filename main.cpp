@@ -43,6 +43,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
         case WM_DESTROY:
         g_Engine.SaveLayoutConfig();
+        CentralDataManager::Instance().StopRealTimeListener();
         PostQuitMessage(0);
         return 0;
     }

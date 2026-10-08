@@ -163,6 +163,7 @@ public:
 
         CentralDataManager::Instance().LoadInitialData(L"cybos_master_data.bin", tf_type, tf_unit);
         LoadLayoutConfig();
+        CentralDataManager::Instance().StartRealTimeListener();
         CentralDataManager::Instance().SetTickCallback([this](const std::wstring& code) {
             for (const auto& s : slots) {
                 if (s.code == code) {
