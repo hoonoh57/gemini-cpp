@@ -13,12 +13,14 @@ struct PipeHeader {
 };
 
 struct BridgeCandle {
-    uint64_t timestamp;
-    double open;
-    double high;
-    double low;
-    double close;
-    double volume;
+    wchar_t date[16];
+    wchar_t time[16];
+    float open;
+    float high;
+    float low;
+    float close;
+    uint64_t volume;
+    float ofi;
 };
 #pragma pack(pop)
 
@@ -66,9 +68,6 @@ int wmain(int argc, wchar_t* argv[]) {
 
             std::wstring reqStr(reinterpret_cast<wchar_t*>(payload.data()), reqHdr.payloadLen / sizeof(wchar_t));
             std::wcout << L"[BRIDGE-32] Received Request: " << reqStr << std::endl;
-
-            // TODO: 실제 Cybos Plus CpSysDib.StockChart 호출 바인딩 구간
-            // COM 초기화 실패 또는 통신 오류 발생 시 실패 규격 반환
         }
 
         DisconnectNamedPipe(hPipe);
