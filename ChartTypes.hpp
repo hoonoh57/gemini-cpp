@@ -37,6 +37,23 @@ struct MarketEyeRequestPacket {
     uint32_t count;
     wchar_t codes[200][16]; // 최대 200종목 단위 배치 요청
 };
+
+#pragma pack(push, 1)
+struct ProgramTradeItem {
+    wchar_t time[16];          // 시간 (HHMMSS)
+    float price;               // 현재가
+    float diff;                // 대비
+    int64_t diffVolume;        // 차익 순매수량
+    int64_t nonDiffVolume;     // 비차익 순매수량
+    int64_t totalNetVolume;    // 전체 순매수량
+    int64_t totalNetMoney;     // 전체 순매수금액 (백만원)
+};
+
+struct ProgramTradeRequestPacket {
+    wchar_t code[16];
+    uint32_t count;            // 요청 건수 (예: 60건)
+};
+#pragma pack(pop)
 #pragma pack(pop)
 #pragma pack(pop)
 #pragma pack(pop)

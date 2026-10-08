@@ -373,6 +373,102 @@ bool RequestMarketEye(const std::vector<std::wstring>& codes, std::vector<Market
     return true;
 }
 
+// CpSysDib.CpSvr7254 프로그램 매매 추이 다운로드 (Cybos 배치 전담)
+bool RequestProgramTrade(const std::wstring& code, uint32_t reqCount, std::vector<ProgramTradeItem>& outItems) {
+    outItems.clear();
+    CLSID clsid;
+    if (FAILED(CLSIDFromProgID(L"CpSysDib.CpSvr7254", &clsid))) return false;
+
+    IDispatch* pPgm = nullptr;
+    if (FAILED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pPgm))) return false;
+
+    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
+    OLECHAR* nameSetInput = (OLECHAR*)L"SetInputValue";
+    OLECHAR* nameReq = (OLECHAR*)L"BlockRequest";
+    OLECHAR* nameGetHdr = (OLECHAR*)L"GetHeaderValue";
+    OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
+
+    pPgm->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
+    pPgm->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidReq);
+    pPgm->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
+    pPgm->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
+
+    auto SetInput = [pPgm, dispidSetInputValue](int type, const VARIANT& val) {
+        VARIANT argType; VariantInit(&argType); argType.vt = VT_I4; argType.lVal = type;
+        VARIANT args[2] = { val, argType };
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        pPgm->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    };
+
+    // 0: 종목코드
+    {
+        VARIANT vCode; VariantInit(&vCode); vCode.vt = VT_BSTR; vCode.bstrVal = SysAllocString(code.c_str());
+        SetInput(0, vCode);
+        VariantClear(&vCode);
+    }
+    // 1: 시간대별 구분 ('1': 시간대별, '2': 일자별)
+    {
+        VARIANT vGubun; VariantInit(&vGubun); vGubun.vt = VT_UI1; vGubun.bVal = '1';
+        SetInput(1, vGubun);
+    }
+
+    // BlockRequest()
+    {
+        DISPPARAMS p{ nullptr, nullptr, 0, 0 };
+        pPgm->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
+    }
+
+    // GetHeaderValue(0): 수신 개수
+    long count = 0;
+    {
+        VARIANT arg; VariantInit(&arg); arg.vt = VT_I4; arg.lVal = 0;
+        DISPPARAMS p{ &arg, nullptr, 1, 0 };
+        VARIANT res; VariantInit(&res);
+        pPgm->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &res, nullptr, nullptr);
+        if (res.vt == VT_I4) count = res.lVal;
+        VariantClear(&res);
+    }
+
+    auto GetData = [pPgm, dispidGetDataValue](int fieldIdx, int row) -> VARIANT {
+        VARIANT args[2];
+        VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = row;
+        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = fieldIdx;
+        DISPPARAMS p{ args, nullptr, 2, 0 };
+        VARIANT ret; VariantInit(&ret);
+        pPgm->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
+        return ret;
+    };
+
+    long targetCount = std::min<long>(count, reqCount > 0 ? (long)reqCount : count);
+    for (int r = 0; r < targetCount; ++r) {
+        ProgramTradeItem item{};
+        VARIANT vTime = GetData(0, r);       // 시간
+        VARIANT vPrice = GetData(1, r);      // 현재가
+        VARIANT vDiff = GetData(2, r);       // 대비
+        VARIANT vDiffVol = GetData(3, r);    // 차익순매수
+        VARIANT vNonDiffVol = GetData(4, r); // 비차익순매수
+        VARIANT vTotalVol = GetData(5, r);   // 전체순매수
+        VARIANT vTotalMoney = GetData(6, r); // 전체순매수금액(백만)
+
+        swprintf_s(item.time, sizeof(item.time)/sizeof(wchar_t), L"%06d", vTime.lVal);
+        item.price = (float)vPrice.lVal;
+        item.diff = (float)vDiff.lVal;
+        item.diffVolume = (int64_t)vDiffVol.lVal;
+        item.nonDiffVolume = (int64_t)vNonDiffVol.lVal;
+        item.totalNetVolume = (int64_t)vTotalVol.lVal;
+        item.totalNetMoney = (int64_t)vTotalMoney.lVal;
+
+        VariantClear(&vTime); VariantClear(&vPrice); VariantClear(&vDiff);
+        VariantClear(&vDiffVol); VariantClear(&vNonDiffVol);
+        VariantClear(&vTotalVol); VariantClear(&vTotalMoney);
+
+        outItems.push_back(item);
+    }
+
+    pPgm->Release();
+    return true;
+}
+
 int wmain(int argc, wchar_t* argv[]) {
     CoInitialize(nullptr);
     StartRealPipeServer();
