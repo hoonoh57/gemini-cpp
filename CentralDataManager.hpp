@@ -16,6 +16,47 @@
 
 class CentralDataManager {
 public:
+    // 대신 Cybos Plus 전용 프로그램 매매 동향 배치 다운로드 IPC (Strict Separation)
+    std::vector<ProgramTradeItem> RequestProgramTrade(const std::wstring& code, uint32_t count = 60) {
+        std::vector<ProgramTradeItem> result;
+        if (code.empty()) return result;
+
+        const wchar_t* PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgePipe";
+        HANDLE hPipe = CreateFileW(
+            PIPE_NAME,
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, OPEN_EXISTING, 0, nullptr
+        );
+
+        if (hPipe == INVALID_HANDLE_VALUE) return result;
+
+        ProgramTradeRequestPacket req{};
+        wcsncpy_s(req.code, sizeof(req.code) / sizeof(wchar_t), code.c_str(), _TRUNCATE);
+        req.count = count;
+
+        PipeHeader reqHdr{};
+        memcpy(reqHdr.magic, "GBRG", 4);
+        reqHdr.msgType = 6; // REQ_PROGRAM_TRADE
+        reqHdr.payloadLen = sizeof(req);
+
+        DWORD written = 0;
+        if (WriteFile(hPipe, &reqHdr, sizeof(reqHdr), &written, nullptr) &&
+            WriteFile(hPipe, &req, sizeof(req), &written, nullptr)) {
+            
+            PipeHeader resHdr{};
+            DWORD readBytes = 0;
+            if (ReadFile(hPipe, &resHdr, sizeof(resHdr), &readBytes, nullptr) &&
+                resHdr.msgType == 7 && resHdr.payloadLen > 0) {
+                
+                uint32_t recCount = resHdr.payloadLen / sizeof(ProgramTradeItem);
+                result.resize(recCount);
+                ReadFile(hPipe, result.data(), resHdr.payloadLen, &readBytes, nullptr);
+            }
+        }
+
+        CloseHandle(hPipe);
+        return result;
+    }
     // 대신 Cybos Plus 전용 다중 종목 배치 데이터 조회 IPC (Strict Separation)
     std::vector<MarketEyeItem> RequestMarketEye(const std::vector<std::wstring>& codes) {
         std::vector<MarketEyeItem> result;
