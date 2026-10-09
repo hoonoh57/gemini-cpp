@@ -16,6 +16,88 @@
 
 class CentralDataManager {
 public:
+    // 키움 체결/잔고 및 조건검색 리스너 인터페이스
+    using ChejanNotifyCallback = std::function<void(const KiwoomChejanPacket&)>;
+    using ConditionNotifyCallback = std::function<void(const KiwoomConditionRealPacket&)>;
+
+    ChejanNotifyCallback m_chejanCallback = nullptr;
+    ConditionNotifyCallback m_condCallback = nullptr;
+    std::thread m_chejanListenerThread;
+    std::thread m_condListenerThread;
+    std::atomic<bool> m_stopChejanListener{false};
+    std::atomic<bool> m_stopCondListener{false};
+
+    void SetChejanCallback(ChejanNotifyCallback cb) { m_chejanCallback = cb; }
+    void SetConditionCallback(ConditionNotifyCallback cb) { m_condCallback = cb; }
+
+    void StartChejanListener() {
+        m_stopChejanListener = false;
+        m_chejanListenerThread = std::thread([this]() {
+            const wchar_t* CHEJAN_PIPE = L"\\\\.\\pipe\\GeminiKiwoomChejanPipe";
+            while (!m_stopChejanListener) {
+                HANDLE hPipe = CreateFileW(CHEJAN_PIPE, GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (hPipe == INVALID_HANDLE_VALUE) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+                while (!m_stopChejanListener) {
+                    PipeHeader hdr{};
+                    DWORD readBytes = 0;
+                    if (!ReadFile(hPipe, &hdr, sizeof(hdr), &readBytes, nullptr) || readBytes != sizeof(hdr)) break;
+                    if (hdr.msgType == 11 && hdr.payloadLen == sizeof(KiwoomChejanPacket)) {
+                        KiwoomChejanPacket packet{};
+                        if (ReadFile(hPipe, &packet, sizeof(packet), &readBytes, nullptr) && readBytes == sizeof(packet)) {
+                            if (m_chejanCallback) m_chejanCallback(packet);
+                        }
+                    } else {
+                        std::vector<char> dummy(hdr.payloadLen);
+                        ReadFile(hPipe, dummy.data(), hdr.payloadLen, &readBytes, nullptr);
+                    }
+                }
+                CloseHandle(hPipe);
+            }
+        });
+    }
+
+    void StopChejanListener() {
+        m_stopChejanListener = true;
+        if (m_chejanListenerThread.joinable()) m_chejanListenerThread.detach();
+    }
+
+    void StartConditionListener() {
+        m_stopCondListener = false;
+        m_condListenerThread = std::thread([this]() {
+            const wchar_t* COND_PIPE = L"\\\\.\\pipe\\GeminiKiwoomConditionPipe";
+            while (!m_stopCondListener) {
+                HANDLE hPipe = CreateFileW(COND_PIPE, GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (hPipe == INVALID_HANDLE_VALUE) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+                while (!m_stopCondListener) {
+                    PipeHeader hdr{};
+                    DWORD readBytes = 0;
+                    if (!ReadFile(hPipe, &hdr, sizeof(hdr), &readBytes, nullptr) || readBytes != sizeof(hdr)) break;
+                    if (hdr.msgType == 21 && hdr.payloadLen == sizeof(KiwoomConditionRealPacket)) {
+                        KiwoomConditionRealPacket packet{};
+                        if (ReadFile(hPipe, &packet, sizeof(packet), &readBytes, nullptr) && readBytes == sizeof(packet)) {
+                            if (m_condCallback) m_condCallback(packet);
+                        }
+                    } else {
+                        std::vector<char> dummy(hdr.payloadLen);
+                        ReadFile(hPipe, dummy.data(), hdr.payloadLen, &readBytes, nullptr);
+                    }
+                }
+                CloseHandle(hPipe);
+            }
+        });
+    }
+
+    void StopConditionListener() {
+        m_stopCondListener = true;
+        if (m_condListenerThread.joinable()) m_condListenerThread.detach();
+    }
+public:
     // 키움 Open API+ 전용 주문 전송 IPC (Strict Separation: Kiwoom handles trading)
     long SendKiwoomOrder(const KiwoomOrderRequest& req) {
         const wchar_t* ORDER_PIPE = L"\\\\.\\pipe\\GeminiKiwoomOrderPipe";
