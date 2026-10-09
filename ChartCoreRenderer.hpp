@@ -7,6 +7,7 @@
 #endif
 #include "Common.hpp"
 #include "ChartTypes.hpp"
+#include "QuickOrderDlg.hpp"
 #include "CentralDataManager.hpp"
 #include "LayoutPersistence.hpp"
 #include "StrategyConditionDlg.hpp"
