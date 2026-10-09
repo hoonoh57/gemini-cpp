@@ -16,6 +16,49 @@
 
 class CentralDataManager {
 public:
+    // 대신 Cybos Plus 전용 다중 종목 배치 데이터 조회 IPC (Strict Separation)
+    std::vector<MarketEyeItem> RequestMarketEye(const std::vector<std::wstring>& codes) {
+        std::vector<MarketEyeItem> result;
+        if (codes.empty()) return result;
+
+        const wchar_t* PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgePipe";
+        HANDLE hPipe = CreateFileW(
+            PIPE_NAME,
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, OPEN_EXISTING, 0, nullptr
+        );
+
+        if (hPipe == INVALID_HANDLE_VALUE) return result;
+
+        MarketEyeRequestPacket req{};
+        req.count = static_cast<uint32_t>(std::min<size_t>(codes.size(), 200));
+        for (uint32_t i = 0; i < req.count; ++i) {
+            wcsncpy_s(req.codes[i], codes[i].c_str(), _TRUNCATE);
+        }
+
+        PipeHeader reqHdr{};
+        memcpy(reqHdr.magic, "GBRG", 4);
+        reqHdr.msgType = 4; // REQ_MARKET_EYE
+        reqHdr.payloadLen = sizeof(req);
+
+        DWORD written = 0;
+        if (WriteFile(hPipe, &reqHdr, sizeof(reqHdr), &written, nullptr) &&
+            WriteFile(hPipe, &req, sizeof(req), &written, nullptr)) {
+            
+            PipeHeader resHdr{};
+            DWORD readBytes = 0;
+            if (ReadFile(hPipe, &resHdr, sizeof(resHdr), &readBytes, nullptr) &&
+                resHdr.msgType == 5 && resHdr.payloadLen > 0) {
+                
+                uint32_t count = resHdr.payloadLen / sizeof(MarketEyeItem);
+                result.resize(count);
+                ReadFile(hPipe, result.data(), resHdr.payloadLen, &readBytes, nullptr);
+            }
+        }
+
+        CloseHandle(hPipe);
+        return result;
+    }
     // 키움 체결/잔고 및 조건검색 리스너 인터페이스
     using ChejanNotifyCallback = std::function<void(const KiwoomChejanPacket&)>;
     using ConditionNotifyCallback = std::function<void(const KiwoomConditionRealPacket&)>;

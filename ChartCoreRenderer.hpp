@@ -48,6 +48,8 @@ struct ChartSlotState {
 };
 
 class ChartCoreEngine {
+private:
+    std::vector<MarketEyeItem> m_marketEyeSnapshot;
 public:
     std::wstring status_msg = L"[READY] Standby";
     bool status_is_error = false;
