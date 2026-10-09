@@ -1,0 +1,33 @@
+{
+  "layout_mode": 4,
+  "slots": [
+    {
+      "code": "A000660",
+      "tf_type": "m",
+      "tf_unit": 1,
+      "visible_bars": 35,
+      "scroll_offset": 0
+    },
+    {
+      "code": "A005930",
+      "tf_type": "m",
+      "tf_unit": 1,
+      "visible_bars": 35,
+      "scroll_offset": 0
+    },
+    {
+      "code": "A028050",
+      "tf_type": "m",
+      "tf_unit": 1,
+      "visible_bars": 35,
+      "scroll_offset": 0
+    },
+    {
+      "code": "A047810",
+      "tf_type": "m",
+      "tf_unit": 1,
+      "visible_bars": 35,
+      "scroll_offset": 0
+    }
+  ]
+}

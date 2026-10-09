@@ -1,663 +1,152 @@
-﻿#include "ChartTypes.hpp"
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+﻿#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <iostream>
-#include <vector>
 #include <string>
+#include <vector>
 #include <sstream>
-#include <comdef.h>
-#include <thread>
-#include <atomic>
 
+#import "C:\DAISHIN\CYBOSPLUS\CpUtil.dll" no_namespace named_guids
+#import "C:\DAISHIN\CYBOSPLUS\CpSysDib.dll" no_namespace named_guids
 
+static const wchar_t* PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgePipe";
 
-const wchar_t* PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgePipe";
+struct SectorRankItem {
+    int rank;
+    std::string code;
+    std::string name;
+    double diff;
+};
 
-// 실시간 시세 구독 (CpSysDib.StockCur)
-bool SubscribeRealTick(const std::wstring& code, IDispatch*& pOutCur, std::wstring& outErrMsg) {
-    CLSID clsidCur;
-    if (FAILED(CLSIDFromProgID(L"CpSysDib.StockCur", &clsidCur))) {
-        outErrMsg = L"CpSysDib.StockCur COM not registered.";
+std::vector<SectorRankItem> g_topSectors;
+
+bool CheckCybosConnection() {
+    ICpCybosPtr pCybos;
+    HRESULT hr = pCybos.CreateInstance(__uuidof(CpCybos));
+    if (FAILED(hr)) {
+        printf("[CYBOS] CpCybos CoCreateInstance FAILED (0x%08X)\n", (unsigned int)hr);
         return false;
     }
-    IDispatch* pCur = nullptr;
-    if (FAILED(CoCreateInstance(clsidCur, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pCur))) {
-        outErrMsg = L"Failed to create CpSysDib.StockCur instance.";
-        return false;
-    }
 
-    DISPID dispidSetInput;
-    OLECHAR* n1 = (OLECHAR*)L"SetInputValue";
-    pCur->GetIDsOfNames(IID_NULL, &n1, 1, LOCALE_USER_DEFAULT, &dispidSetInput);
+    short isConnect = pCybos->GetIsConnect();
+    short serverType = pCybos->GetServerType();
 
-    // 0: 종목코드 설정
-    std::wstring stockCode = (code.rfind(L"A", 0) == 0) ? code : (L"A" + code);
-    VARIANT vCode; VariantInit(&vCode); vCode.vt = VT_BSTR; vCode.bstrVal = SysAllocString(stockCode.c_str());
+    printf("[CYBOS] Connection Status : %d (%s)\n", 
+           isConnect, (isConnect == 1 ? "CONNECTED (OK)" : "DISCONNECTED (Login Required)"));
+    printf("[CYBOS] Server Type       : %d (%s)\n", 
+           serverType, (serverType == 1 ? "CyBos Real Server" : "Simulation Server"));
 
-    VARIANT args[2];
-    VariantInit(&args[0]); args[0] = vCode;
-    VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = 0;
-    DISPPARAMS params{ args, nullptr, 2, 0 };
-    pCur->Invoke(dispidSetInput, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &params, nullptr, nullptr, nullptr);
-    SysFreeString(vCode.bstrVal);
-
-    // Subscribe 호출
-    DISPID dispidSub;
-    OLECHAR* n2 = (OLECHAR*)L"Subscribe";
-    pCur->GetIDsOfNames(IID_NULL, &n2, 1, LOCALE_USER_DEFAULT, &dispidSub);
-    DISPPARAMS noParams{ nullptr, nullptr, 0, 0 };
-    pCur->Invoke(dispidSub, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &noParams, nullptr, nullptr, nullptr);
-
-    pOutCur = pCur;
-    return true;
+    return (isConnect == 1);
 }
 
-// 차트 TR 조회 (CpSysDib.StockChart)
-bool FetchCybosCandles(const std::wstring& code, char tfType, int tfUnit, int count, std::vector<BridgeCandle>& outCandles, std::wstring& outErrMsg) {
-    CLSID clsidCybos, clsidChart;
-    if (FAILED(CLSIDFromProgID(L"CpUtil.CpCybos", &clsidCybos))) {
-        outErrMsg = L"Cybos Plus COM (CpUtil.CpCybos) not registered.";
-        return false;
-    }
-    if (FAILED(CLSIDFromProgID(L"CpSysDib.StockChart", &clsidChart))) {
-        outErrMsg = L"Cybos Plus COM (CpSysDib.StockChart) not registered.";
-        return false;
-    }
-
-    IDispatch* pCybos = nullptr;
-    if (FAILED(CoCreateInstance(clsidCybos, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pCybos))) {
-        outErrMsg = L"Failed to create CpUtil.CpCybos instance.";
-        return false;
-    }
-
-    DISPID dispidConnect;
-    OLECHAR* nameConnect = (OLECHAR*)L"IsConnect";
-    long isConnect = 0;
-    if (SUCCEEDED(pCybos->GetIDsOfNames(IID_NULL, &nameConnect, 1, LOCALE_USER_DEFAULT, &dispidConnect))) {
-        DISPPARAMS params{ nullptr, nullptr, 0, 0 };
-        VARIANT res; VariantInit(&res);
-        if (SUCCEEDED(pCybos->Invoke(dispidConnect, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &params, &res, nullptr, nullptr))) {
-            isConnect = res.lVal;
-            VariantClear(&res);
+bool FetchTopSectors() {
+    g_topSectors.clear();
+    try {
+        ISysDibPtr pSectorRanking;
+        HRESULT hr = pSectorRanking.CreateInstance(__uuidof(CpSvrNew7043));
+        if (FAILED(hr)) {
+            printf("[CYBOS] CpSvrNew7043 COM Instance creation FAILED.\n");
+            return false;
         }
-    }
-    pCybos->Release();
 
-    if (isConnect != 1) {
-        outErrMsg = L"Cybos Plus is not connected/logged in. Please start Cybos Starter.";
-        return false;
-    }
+        // 전체 시장(0) 주도 업종 랭킹 조회
+        pSectorRanking->SetInputValue(0, _variant_t((char)'0'));
+        pSectorRanking->BlockRequest();
 
-    IDispatch* pChart = nullptr;
-    if (FAILED(CoCreateInstance(clsidChart, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pChart))) {
-        outErrMsg = L"Failed to create CpSysDib.StockChart instance.";
-        return false;
-    }
+        short count = pSectorRanking->GetHeaderValue(0);
+        printf("[CYBOS] CpSvrNew7043 Response: Count = %d items.\n", count);
 
-    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
-    OLECHAR* n1 = (OLECHAR*)L"SetInputValue";
-    OLECHAR* n2 = (OLECHAR*)L"BlockRequest";
-    OLECHAR* n3 = (OLECHAR*)L"GetHeaderValue";
-    OLECHAR* n4 = (OLECHAR*)L"GetDataValue";
-    pChart->GetIDsOfNames(IID_NULL, &n1, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
-    pChart->GetIDsOfNames(IID_NULL, &n2, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
-    pChart->GetIDsOfNames(IID_NULL, &n3, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
-    pChart->GetIDsOfNames(IID_NULL, &n4, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
+        for (short i = 0; i < count; ++i) {
+            _bstr_t bstrCode = pSectorRanking->GetDataValue(0, i);
+            _bstr_t bstrName = pSectorRanking->GetDataValue(1, i);
+            double diff = pSectorRanking->GetDataValue(3, i);
 
-    auto CallSetInput = [pChart, dispidSetInputValue](int type, VARIANT val) {
-        VARIANT args[2];
-        VariantInit(&args[0]); args[0] = val;
-        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = type;
-        DISPPARAMS params{ args, nullptr, 2, 0 };
-        pChart->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &params, nullptr, nullptr, nullptr);
-    };
-
-    std::wstring stockCode = (code.rfind(L"A", 0) == 0) ? code : (L"A" + code);
-    VARIANT vCode; VariantInit(&vCode); vCode.vt = VT_BSTR; vCode.bstrVal = SysAllocString(stockCode.c_str());
-    CallSetInput(0, vCode);
-    SysFreeString(vCode.bstrVal);
-
-    VARIANT vReqType; VariantInit(&vReqType); vReqType.vt = VT_UI1; vReqType.bVal = '2';
-    CallSetInput(1, vReqType);
-
-    VARIANT vCount; VariantInit(&vCount); vCount.vt = VT_I4; vCount.lVal = count;
-    CallSetInput(4, vCount);
-
-    SAFEARRAYBOUND sab[1] = { { 7, 0 } };
-    SAFEARRAY* psa = SafeArrayCreate(VT_VARIANT, 1, sab);
-    long flds[] = { 0, 1, 2, 3, 4, 5, 8 };
-    for (long i = 0; i < 7; ++i) {
-        VARIANT vf; VariantInit(&vf); vf.vt = VT_I4; vf.lVal = flds[i];
-        SafeArrayPutElement(psa, &i, &vf);
-    }
-    VARIANT vArr; VariantInit(&vArr); vArr.vt = VT_ARRAY | VT_VARIANT; vArr.parray = psa;
-    CallSetInput(5, vArr);
-    SafeArrayDestroy(psa);
-
-    VARIANT vChartType; VariantInit(&vChartType); vChartType.vt = VT_UI1; vChartType.bVal = (BYTE)tfType;
-    CallSetInput(6, vChartType);
-
-    VARIANT vUnit; VariantInit(&vUnit); vUnit.vt = VT_I4; vUnit.lVal = tfUnit;
-    CallSetInput(7, vUnit);
-
-    VARIANT vVolType; VariantInit(&vVolType); vVolType.vt = VT_UI1; vVolType.bVal = '1';
-    CallSetInput(10, vVolType);
-
-    DISPPARAMS noParams{ nullptr, nullptr, 0, 0 };
-    pChart->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &noParams, nullptr, nullptr, nullptr);
-
-    VARIANT vHdrIdx; VariantInit(&vHdrIdx); vHdrIdx.vt = VT_I4; vHdrIdx.lVal = 3;
-    DISPPARAMS hdrParams{ &vHdrIdx, nullptr, 1, 0 };
-    VARIANT vRetCount; VariantInit(&vRetCount);
-    pChart->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &hdrParams, &vRetCount, nullptr, nullptr);
-    int received = (vRetCount.vt == VT_I4) ? vRetCount.lVal : 0;
-    VariantClear(&vRetCount);
-
-    if (received <= 0) {
-        pChart->Release();
-        outErrMsg = L"Cybos Plus returned 0 candles for " + code;
-        return false;
-    }
-
-    outCandles.resize(received);
-    for (int i = 0; i < received; ++i) {
-        int targetIdx = received - 1 - i;
-        auto GetData = [pChart, dispidGetDataValue, i](int fieldIdx) -> VARIANT {
-            VARIANT args[2];
-            VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = fieldIdx; // col
-            VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = i;        // row
-            DISPPARAMS p{ args, nullptr, 2, 0 };
-            VARIANT ret; VariantInit(&ret);
-            pChart->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
-            return ret;
-        };
-
-        VARIANT vD = GetData(0);
-        VARIANT vT = GetData(1);
-        VARIANT vO = GetData(2);
-        VARIANT vH = GetData(3);
-        VARIANT vL = GetData(4);
-        VARIANT vC = GetData(5);
-        VARIANT vV = GetData(6);
-
-        BridgeCandle& bc = outCandles[targetIdx];
-        swprintf_s(bc.date, L"%d", vD.lVal);
-        swprintf_s(bc.time, L"%04d", vT.lVal);
-        bc.open = (float)vO.lVal;
-        bc.high = (float)vH.lVal;
-        bc.low = (float)vL.lVal;
-        bc.close = (float)vC.lVal;
-        bc.volume = (uint64_t)vV.lVal;
-        bc.ofi = 0.0f;
-
-        VariantClear(&vD); VariantClear(&vT); VariantClear(&vO);
-        VariantClear(&vH); VariantClear(&vL); VariantClear(&vC); VariantClear(&vV);
-    }
-
-    pChart->Release();
-    return true;
-}
-
-const wchar_t* REAL_PIPE_NAME = L"\\\\.\\pipe\\GeminiBridgeRealPipe";
-HANDLE g_hRealPipe = INVALID_HANDLE_VALUE;
-std::atomic<bool> g_realPipeConnected{false};
-
-void StartRealPipeServer() {
-    std::thread([]() {
-        while (true) {
-            HANDLE hPipe = CreateNamedPipeW(
-                REAL_PIPE_NAME,
-                PIPE_ACCESS_OUTBOUND,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                1, 4096, 4096, 0, nullptr
-            );
-
-            if (hPipe == INVALID_HANDLE_VALUE) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                continue;
-            }
-
-            if (ConnectNamedPipe(hPipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED) {
-                g_hRealPipe = hPipe;
-                g_realPipeConnected = true;
-                std::wcout << L"[BRIDGE-32] Real-time pipe connected to 64-bit engine." << std::endl;
-
-                while (g_realPipeConnected) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                }
-            }
-
-            g_realPipeConnected = false;
-            CloseHandle(hPipe);
-            g_hRealPipe = INVALID_HANDLE_VALUE;
+            SectorRankItem item;
+            item.rank = (int)(i + 1);
+            item.code = (const char*)bstrCode ? (const char*)bstrCode : "";
+            item.name = (const char*)bstrName ? (const char*)bstrName : "";
+            item.diff = diff;
+            g_topSectors.push_back(item);
         }
-    }).detach();
-}
-
-void BroadcastRealTick(const RealTickPacket& tick) {
-    if (!g_realPipeConnected || g_hRealPipe == INVALID_HANDLE_VALUE) return;
-
-    PipeHeader hdr{};
-    memcpy(hdr.magic, "GBRG", 4);
-    hdr.msgType = 3; // REAL_TICK
-    hdr.payloadLen = sizeof(RealTickPacket);
-
-    DWORD written = 0;
-    if (!WriteFile(g_hRealPipe, &hdr, sizeof(hdr), &written, nullptr) ||
-        !WriteFile(g_hRealPipe, &tick, sizeof(tick), &written, nullptr)) {
-        g_realPipeConnected = false;
+        return true;
+    }
+    catch (_com_error& e) {
+        printf("[CYBOS] CpSvrNew7043 COM Error: %s (0x%08X)\n", (const char*)e.Description(), e.Error());
+        return false;
     }
 }
 
-// CpSysDib.MarketEye 다중 종목 배치 데이터 다운로드 (Cybos 전담)
-bool RequestMarketEye(const std::vector<std::wstring>& codes, std::vector<MarketEyeItem>& outItems) {
-    outItems.clear();
-    if (codes.empty()) return false;
+int main(int argc, char* argv[]) {
+    SetConsoleOutputCP(CP_UTF8);
 
-    CLSID clsid;
-    if (FAILED(CLSIDFromProgID(L"CpSysDib.MarketEye", &clsid))) return false;
+    printf("==================================================\n");
+    printf("[BRIDGE-32] Gemini Cybos 32-bit IPC Broker Active\n");
+    printf("==================================================\n");
 
-    IDispatch* pEye = nullptr;
-    if (FAILED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pEye))) return false;
-
-    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
-    OLECHAR* nameSetInput = (OLECHAR*)L"SetInputValue";
-    OLECHAR* nameReq = (OLECHAR*)L"BlockRequest";
-    OLECHAR* nameGetHdr = (OLECHAR*)L"GetHeaderValue";
-    OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
-
-    pEye->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
-    pEye->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
-    pEye->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
-    pEye->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
-
-    // 필드 정의: 0(종목코드), 4(현재가), 5(전일대비), 6(등락률), 10(거래량), 7(매도호가), 8(매수호가), 17(종목명), 20(기관순매수), 21(외인순매수)
-    long fields[] = { 0, 4, 5, 6, 10, 7, 8, 17, 20, 21 };
-    int fieldCount = sizeof(fields) / sizeof(fields[0]);
-
-    SAFEARRAYBOUND sabField{ (ULONG)fieldCount, 0 };
-    SAFEARRAY* psaFields = SafeArrayCreate(VT_VARIANT, 1, &sabField);
-    for (LONG i = 0; i < fieldCount; ++i) {
-        VARIANT v; VariantInit(&v); v.vt = VT_I4; v.lVal = fields[i];
-        SafeArrayPutElement(psaFields, &i, &v);
+    HRESULT hr = CoInitialize(NULL);
+    if (FAILED(hr)) {
+        printf("[ERROR] CoInitialize FAILED (0x%08X)\n", (unsigned int)hr);
+        return 1;
     }
 
-    // SetInputValue(0, fields)
-    {
-        VARIANT a0; VariantInit(&a0); a0.vt = VT_I4; a0.lVal = 0;
-        VARIANT a1; VariantInit(&a1); a1.vt = VT_ARRAY | VT_VARIANT; a1.parray = psaFields;
-        VARIANT args[2] = { a1, a0 };
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        pEye->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    }
-    SafeArrayDestroy(psaFields);
-
-    // 종목 배열 생성 및 SetInputValue(1, codes)
-    SAFEARRAYBOUND sabCodes{ (ULONG)codes.size(), 0 };
-    SAFEARRAY* psaCodes = SafeArrayCreate(VT_VARIANT, 1, &sabCodes);
-    for (LONG i = 0; i < (LONG)codes.size(); ++i) {
-        VARIANT v; VariantInit(&v); v.vt = VT_BSTR; v.bstrVal = SysAllocString(codes[i].c_str());
-        SafeArrayPutElement(psaCodes, &i, &v);
-        VariantClear(&v);
+    bool connected = CheckCybosConnection();
+    if (connected) {
+        FetchTopSectors();
+    } else {
+        printf("[WARN] Cybos Plus is not logged in or Admin privileges missing.\n");
     }
 
-    {
-        VARIANT a0; VariantInit(&a0); a0.vt = VT_I4; a0.lVal = 1;
-        VARIANT a1; VariantInit(&a1); a1.vt = VT_ARRAY | VT_VARIANT; a1.parray = psaCodes;
-        VARIANT args[2] = { a1, a0 };
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        pEye->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    }
-    SafeArrayDestroy(psaCodes);
-
-    // BlockRequest()
-    {
-        DISPPARAMS p{ nullptr, nullptr, 0, 0 };
-        pEye->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    }
-
-    // GetHeaderValue(2): 수신 데이터 개수
-    long count = 0;
-    {
-        VARIANT arg; VariantInit(&arg); arg.vt = VT_I4; arg.lVal = 2;
-        DISPPARAMS p{ &arg, nullptr, 1, 0 };
-        VARIANT res; VariantInit(&res);
-        pEye->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &res, nullptr, nullptr);
-        if (res.vt == VT_I4) count = res.lVal;
-        VariantClear(&res);
-    }
-
-    auto GetData = [pEye, dispidGetDataValue](int fieldIdx, int row) -> VARIANT {
-        VARIANT args[2];
-        VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = row;      // 행
-        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = fieldIdx; // 열
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        VARIANT ret; VariantInit(&ret);
-        pEye->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
-        return ret;
-    };
-
-    for (int r = 0; r < count; ++r) {
-        MarketEyeItem item{};
-        VARIANT vCode = GetData(0, r);
-        VARIANT vPrice = GetData(1, r);
-        VARIANT vDiff = GetData(2, r);
-        VARIANT vRate = GetData(3, r);
-        VARIANT vVol = GetData(4, r);
-        VARIANT vAsk = GetData(5, r);
-        VARIANT vBid = GetData(6, r);
-        VARIANT vName = GetData(7, r);
-        VARIANT vInst = GetData(8, r);
-        VARIANT vFrgn = GetData(9, r);
-
-        if (vCode.vt == VT_BSTR && vCode.bstrVal) wcsncpy_s(item.code, sizeof(item.code) / sizeof(wchar_t), vCode.bstrVal, _TRUNCATE);
-        if (vName.vt == VT_BSTR && vName.bstrVal) wcsncpy_s(item.name, sizeof(item.name) / sizeof(wchar_t), vName.bstrVal, _TRUNCATE);
-        item.curPrice = (float)vPrice.lVal;
-        item.diff = (float)vDiff.lVal;
-        item.diffRate = (vRate.vt == VT_R4) ? vRate.fltVal : (float)vRate.dblVal;
-        item.volume = (uint64_t)vVol.lVal;
-        item.askPrice = (float)vAsk.lVal;
-        item.bidPrice = (float)vBid.lVal;
-        item.instNetBuy = (int64_t)vInst.lVal;
-        item.foreignNetBuy = (int64_t)vFrgn.lVal;
-
-        VariantClear(&vCode); VariantClear(&vPrice); VariantClear(&vDiff);
-        VariantClear(&vRate); VariantClear(&vVol); VariantClear(&vAsk);
-        VariantClear(&vBid); VariantClear(&vName); VariantClear(&vInst); VariantClear(&vFrgn);
-
-        outItems.push_back(item);
-    }
-
-    pEye->Release();
-    return true;
-}
-
-// CpSysDib.CpSvr7254 프로그램 매매 추이 다운로드 (Cybos 배치 전담)
-bool RequestProgramTrade(const std::wstring& code, uint32_t reqCount, std::vector<ProgramTradeItem>& outItems) {
-    outItems.clear();
-    CLSID clsid;
-    if (FAILED(CLSIDFromProgID(L"CpSysDib.CpSvr7254", &clsid))) return false;
-
-    IDispatch* pPgm = nullptr;
-    if (FAILED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pPgm))) return false;
-
-    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
-    OLECHAR* nameSetInput = (OLECHAR*)L"SetInputValue";
-    OLECHAR* nameReq = (OLECHAR*)L"BlockRequest";
-    OLECHAR* nameGetHdr = (OLECHAR*)L"GetHeaderValue";
-    OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
-
-    pPgm->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
-    pPgm->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
-    pPgm->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
-    pPgm->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
-
-    auto SetInput = [pPgm, dispidSetInputValue](int type, const VARIANT& val) {
-        VARIANT argType; VariantInit(&argType); argType.vt = VT_I4; argType.lVal = type;
-        VARIANT args[2] = { val, argType };
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        pPgm->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    };
-
-    // 0: 종목코드
-    {
-        VARIANT vCode; VariantInit(&vCode); vCode.vt = VT_BSTR; vCode.bstrVal = SysAllocString(code.c_str());
-        SetInput(0, vCode);
-        VariantClear(&vCode);
-    }
-    // 1: 시간대별 구분 ('1': 시간대별, '2': 일자별)
-    {
-        VARIANT vGubun; VariantInit(&vGubun); vGubun.vt = VT_UI1; vGubun.bVal = '1';
-        SetInput(1, vGubun);
-    }
-
-    // BlockRequest()
-    {
-        DISPPARAMS p{ nullptr, nullptr, 0, 0 };
-        pPgm->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    }
-
-    // GetHeaderValue(0): 수신 개수
-    long count = 0;
-    {
-        VARIANT arg; VariantInit(&arg); arg.vt = VT_I4; arg.lVal = 0;
-        DISPPARAMS p{ &arg, nullptr, 1, 0 };
-        VARIANT res; VariantInit(&res);
-        pPgm->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &res, nullptr, nullptr);
-        if (res.vt == VT_I4) count = res.lVal;
-        VariantClear(&res);
-    }
-
-    auto GetData = [pPgm, dispidGetDataValue](int fieldIdx, int row) -> VARIANT {
-        VARIANT args[2];
-        VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = row;
-        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = fieldIdx;
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        VARIANT ret; VariantInit(&ret);
-        pPgm->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
-        return ret;
-    };
-
-    long targetCount = std::min<long>(count, reqCount > 0 ? (long)reqCount : count);
-    for (int r = 0; r < targetCount; ++r) {
-        ProgramTradeItem item{};
-        VARIANT vTime = GetData(0, r);       // 시간
-        VARIANT vPrice = GetData(1, r);      // 현재가
-        VARIANT vDiff = GetData(2, r);       // 대비
-        VARIANT vDiffVol = GetData(3, r);    // 차익순매수
-        VARIANT vNonDiffVol = GetData(4, r); // 비차익순매수
-        VARIANT vTotalVol = GetData(5, r);   // 전체순매수
-        VARIANT vTotalMoney = GetData(6, r); // 전체순매수금액(백만)
-
-        swprintf_s(item.time, sizeof(item.time)/sizeof(wchar_t), L"%06d", vTime.lVal);
-        item.price = (float)vPrice.lVal;
-        item.diff = (float)vDiff.lVal;
-        item.diffVolume = (int64_t)vDiffVol.lVal;
-        item.nonDiffVolume = (int64_t)vNonDiffVol.lVal;
-        item.totalNetVolume = (int64_t)vTotalVol.lVal;
-        item.totalNetMoney = (int64_t)vTotalMoney.lVal;
-
-        VariantClear(&vTime); VariantClear(&vPrice); VariantClear(&vDiff);
-        VariantClear(&vDiffVol); VariantClear(&vNonDiffVol);
-        VariantClear(&vTotalVol); VariantClear(&vTotalMoney);
-
-        outItems.push_back(item);
-    }
-
-    pPgm->Release();
-    return true;
-}
-
-// CpSysDib.CpSvr7043 업종별 시세 및 등락 랭킹 다운로드 (Cybos 배치 전담)
-bool RequestSectorRanking(std::vector<SectorRankingItem>& outItems) {
-    outItems.clear();
-    CLSID clsid;
-    if (FAILED(CLSIDFromProgID(L"CpSysDib.CpSvr7043", &clsid))) return false;
-
-    IDispatch* pSec = nullptr;
-    if (FAILED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_IDispatch, (void**)&pSec))) return false;
-
-    DISPID dispidSetInputValue, dispidBlockRequest, dispidGetHeaderValue, dispidGetDataValue;
-    OLECHAR* nameSetInput = (OLECHAR*)L"SetInputValue";
-    OLECHAR* nameReq = (OLECHAR*)L"BlockRequest";
-    OLECHAR* nameGetHdr = (OLECHAR*)L"GetHeaderValue";
-    OLECHAR* nameGetData = (OLECHAR*)L"GetDataValue";
-
-    pSec->GetIDsOfNames(IID_NULL, &nameSetInput, 1, LOCALE_USER_DEFAULT, &dispidSetInputValue);
-    pSec->GetIDsOfNames(IID_NULL, &nameReq, 1, LOCALE_USER_DEFAULT, &dispidBlockRequest);
-    pSec->GetIDsOfNames(IID_NULL, &nameGetHdr, 1, LOCALE_USER_DEFAULT, &dispidGetHeaderValue);
-    pSec->GetIDsOfNames(IID_NULL, &nameGetData, 1, LOCALE_USER_DEFAULT, &dispidGetDataValue);
-
-    auto SetInput = [pSec, dispidSetInputValue](int type, const VARIANT& val) {
-        VARIANT argType; VariantInit(&argType); argType.vt = VT_I4; argType.lVal = type;
-        VARIANT args[2] = { val, argType };
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        pSec->Invoke(dispidSetInputValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    };
-
-    // 0: 시장구분 ('1': 거래소, '2': 코스닥) -> '1' 기본
-    {
-        VARIANT vGubun; VariantInit(&vGubun); vGubun.vt = VT_UI1; vGubun.bVal = '1';
-        SetInput(0, vGubun);
-    }
-    // 1: 정렬구분 ('1': 상승률순, '2': 하락률순) -> '1' 기본
-    {
-        VARIANT vSort; VariantInit(&vSort); vSort.vt = VT_UI1; vSort.bVal = '1';
-        SetInput(1, vSort);
-    }
-
-    // BlockRequest()
-    {
-        DISPPARAMS p{ nullptr, nullptr, 0, 0 };
-        pSec->Invoke(dispidBlockRequest, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, nullptr, nullptr, nullptr);
-    }
-
-    // GetHeaderValue(0): 수신 건수
-    long count = 0;
-    {
-        VARIANT arg; VariantInit(&arg); arg.vt = VT_I4; arg.lVal = 0;
-        DISPPARAMS p{ &arg, nullptr, 1, 0 };
-        VARIANT res; VariantInit(&res);
-        pSec->Invoke(dispidGetHeaderValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &res, nullptr, nullptr);
-        if (res.vt == VT_I4) count = res.lVal;
-        VariantClear(&res);
-    }
-
-    auto GetData = [pSec, dispidGetDataValue](int fieldIdx, int row) -> VARIANT {
-        VARIANT args[2];
-        VariantInit(&args[0]); args[0].vt = VT_I4; args[0].lVal = row;
-        VariantInit(&args[1]); args[1].vt = VT_I4; args[1].lVal = fieldIdx;
-        DISPPARAMS p{ args, nullptr, 2, 0 };
-        VARIANT ret; VariantInit(&ret);
-        pSec->Invoke(dispidGetDataValue, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &p, &ret, nullptr, nullptr);
-        return ret;
-    };
-
-    for (int r = 0; r < count; ++r) {
-        SectorRankingItem item{};
-        VARIANT vCode = GetData(0, r);       // 업종코드
-        VARIANT vName = GetData(1, r);       // 업종명
-        VARIANT vCur = GetData(2, r);        // 현재지수
-        VARIANT vDiff = GetData(3, r);       // 대비
-        VARIANT vRate = GetData(4, r);       // 등락률
-        VARIANT vVol = GetData(5, r);        // 거래량(천주)
-        VARIANT vAmt = GetData(6, r);        // 거래대금(백만)
-        VARIANT vUp = GetData(7, r);         // 상승종목수
-        VARIANT vDown = GetData(9, r);       // 하락종목수
-
-        if (vCode.vt == VT_BSTR && vCode.bstrVal) wcsncpy_s(item.code, sizeof(item.code)/sizeof(wchar_t), vCode.bstrVal, _TRUNCATE);
-        if (vName.vt == VT_BSTR && vName.bstrVal) wcsncpy_s(item.name, sizeof(item.name)/sizeof(wchar_t), vName.bstrVal, _TRUNCATE);
-        item.curIndex = (vCur.vt == VT_R4) ? vCur.fltVal : (float)vCur.dblVal;
-        item.diff = (vDiff.vt == VT_R4) ? vDiff.fltVal : (float)vDiff.dblVal;
-        item.diffRate = (vRate.vt == VT_R4) ? vRate.fltVal : (float)vRate.dblVal;
-        item.volume = (uint64_t)vVol.lVal;
-        item.amount = (uint64_t)vAmt.lVal;
-        item.upCount = (uint32_t)vUp.lVal;
-        item.downCount = (uint32_t)vDown.lVal;
-
-        VariantClear(&vCode); VariantClear(&vName); VariantClear(&vCur);
-        VariantClear(&vDiff); VariantClear(&vRate); VariantClear(&vVol);
-        VariantClear(&vAmt); VariantClear(&vUp); VariantClear(&vDown);
-
-        outItems.push_back(item);
-    }
-
-    pSec->Release();
-    return true;
-}
-
-int wmain(int argc, wchar_t* argv[]) {
-    CoInitialize(nullptr);
-    StartRealPipeServer();
-    std::wcout << L"[BRIDGE-32] Gemini 32-bit Cybos IPC Bridge Broker Active." << std::endl;
-
+    printf("\n[PIPE] Creating Named Pipe: \\\\.\\pipe\\GeminiBridgePipe\n");
     HANDLE hPipe = CreateNamedPipeW(
         PIPE_NAME,
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        1, 65536, 65536, 0, nullptr
+        1,
+        65536,
+        65536,
+        0,
+        NULL
     );
 
     if (hPipe == INVALID_HANDLE_VALUE) {
-        std::wcout << L"[BRIDGE-32][FATAL] Named Pipe creation failed. Error: " << GetLastError() << std::endl;
+        printf("[ERROR] CreateNamedPipe FAILED. Error Code: %lu\n", GetLastError());
         CoUninitialize();
         return 1;
     }
 
-    std::wcout << L"[BRIDGE-32] Named Pipe: " << PIPE_NAME << std::endl;
-    std::wcout << L"[BRIDGE-32] Waiting for 64-bit Main Engine connection..." << std::endl;
+    printf("[PIPE] Waiting for 64-bit Main Engine connection...\n");
+    BOOL clientConnected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
 
-    IDispatch* pActiveCur = nullptr;
+    if (clientConnected) {
+        printf("[PIPE] 64-bit Main Engine Connected successfully.\n");
+        
+        // 1. 핸드셰이크 패킷 전송
+        std::string initMsg = "CYBOS_BRIDGE_READY\n";
+        DWORD bytesWritten = 0;
+        WriteFile(hPipe, initMsg.c_str(), (DWORD)initMsg.size(), &bytesWritten, NULL);
 
-    while (true) {
-        BOOL connected = ConnectNamedPipe(hPipe, nullptr) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
-        if (!connected) {
-            CloseHandle(hPipe);
-            CoUninitialize();
-            return 1;
+        // 2. 수집된 업종 랭킹 데이터 일괄 전송
+        std::stringstream ss;
+        for (const auto& item : g_topSectors) {
+            ss << "SECTOR_RANK|" << item.rank << "|" << item.code << "|" << item.name << "|" << item.diff << "\n";
+        }
+        std::string packetData = ss.str();
+        if (!packetData.empty()) {
+            WriteFile(hPipe, packetData.c_str(), (DWORD)packetData.size(), &bytesWritten, NULL);
+            FlushFileBuffers(hPipe);
+            printf("[PIPE] Sent %zu sector rank items to 64-bit Main Engine.\n", g_topSectors.size());
         }
 
-        std::wcout << L"[BRIDGE-32] Main Engine client connected." << std::endl;
-
-        PipeHeader reqHdr{};
+        // 3. 메시지 대기 루프
+        char buffer[1024];
         DWORD bytesRead = 0;
-        BOOL ok = ReadFile(hPipe, &reqHdr, sizeof(reqHdr), &bytesRead, nullptr);
-        if (ok && bytesRead == sizeof(reqHdr)) {
-            std::vector<char> payload(reqHdr.payloadLen + 1, 0);
-            if (reqHdr.payloadLen > 0) {
-                ReadFile(hPipe, payload.data(), reqHdr.payloadLen, &bytesRead, nullptr);
-            }
-
-            std::wstring reqStr(reinterpret_cast<wchar_t*>(payload.data()), reqHdr.payloadLen / sizeof(wchar_t));
-            std::wcout << L"[BRIDGE-32] Request: " << reqStr << std::endl;
-
-            // 파싱: CODE|TF_TYPE|TF_UNIT|COUNT
-            std::wstringstream ss(reqStr);
-            std::wstring item, code;
-            char tfType = 'm';
-            int tfUnit = 1, count = 150;
-            if (std::getline(ss, item, L'|')) code = item;
-            if (std::getline(ss, item, L'|') && !item.empty()) tfType = (char)item[0];
-            if (std::getline(ss, item, L'|')) tfUnit = _wtoi(item.c_str());
-            if (std::getline(ss, item, L'|')) count = _wtoi(item.c_str());
-
-            std::vector<BridgeCandle> candles;
-            std::wstring errMsg;
-            bool success = FetchCybosCandles(code, tfType, tfUnit, count, candles, errMsg);
-
-            if (success) {
-                PipeHeader resHdr{};
-                memcpy(resHdr.magic, "GBRG", 4);
-                resHdr.msgType = 2; // RES_CANDLES
-                resHdr.payloadLen = static_cast<uint32_t>(candles.size() * sizeof(BridgeCandle));
-
-                DWORD written = 0;
-                WriteFile(hPipe, &resHdr, sizeof(resHdr), &written, nullptr);
-                WriteFile(hPipe, candles.data(), resHdr.payloadLen, &written, nullptr);
-                std::wcout << L"[BRIDGE-32] Replied with " << candles.size() << L" candles for " << code << std::endl;
-
-                // 실시간 시세 구독 연계
-                if (pActiveCur) { pActiveCur->Release(); pActiveCur = nullptr; }
-                std::wstring subErr;
-                SubscribeRealTick(code, pActiveCur, subErr);
-            } else {
-                std::wcout << L"[BRIDGE-32][ERROR] " << errMsg << std::endl;
-                PipeHeader errHdr{};
-                memcpy(errHdr.magic, "GBRG", 4);
-                errHdr.msgType = 99; // ERROR
-                errHdr.payloadLen = static_cast<uint32_t>(errMsg.size() * sizeof(wchar_t));
-
-                DWORD written = 0;
-                WriteFile(hPipe, &errHdr, sizeof(errHdr), &written, nullptr);
-                WriteFile(hPipe, errMsg.c_str(), errHdr.payloadLen, &written, nullptr);
-            }
+        while (ReadFile(hPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+            printf("[PIPE RECV] %s\n", buffer);
         }
 
         DisconnectNamedPipe(hPipe);
     }
 
-    if (pActiveCur) pActiveCur->Release();
     CloseHandle(hPipe);
     CoUninitialize();
     return 0;

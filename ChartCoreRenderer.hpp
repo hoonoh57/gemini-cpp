@@ -143,6 +143,7 @@ public:
     int drag_start_offset = 0;
 
     void Init(HWND h) {
+        hwnd = h;
         if (!hEditSymbol) {
             hEditSymbol = CreateWindowExW(
                 WS_EX_CLIENTEDGE, L"EDIT", L"",
