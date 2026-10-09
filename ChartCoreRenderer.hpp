@@ -50,6 +50,8 @@ struct ChartSlotState {
 class ChartCoreEngine {
 private:
     std::vector<MarketEyeItem> m_marketEyeSnapshot;
+        // Cybos 프로그램 매매 추이 버퍼
+    std::vector<ProgramTradeItem> m_programTradeData;
 public:
     std::wstring status_msg = L"[READY] Standby";
     bool status_is_error = false;
@@ -193,6 +195,8 @@ public:
         // Cybos 배치 스냅샷 초기 요청 (관심 종목)
         std::vector<std::wstring> watchList = { L"A005930", L"A000660" };
         m_marketEyeSnapshot = CentralDataManager::Instance().RequestMarketEye(watchList);
+        // Cybos 프로그램 순매수 추이 초기 요청 (삼성전자 기준 60건)
+        m_programTradeData = CentralDataManager::Instance().RequestProgramTrade(L"A005930", 60);
         CentralDataManager::Instance().SetTickCallback([this](const std::wstring& code) {
             for (const auto& s : slots) {
                 if (s.code == code) {
