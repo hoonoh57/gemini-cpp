@@ -1,4 +1,4 @@
-# 세션 인수인계 문서 (SESSION_HANDOFF.md)
+﻿# 개발 세션 인계 문서 (SESSION_HANDOFF.md)
 
 이 문서는 새 대화 세션 시작 시 "세션이어가!" 명령 한마디로 프로젝트의 전체 아키텍처, 빌드 파이프라인, 기구현 모듈, 향후 작업 로드맵을 100% 복원하기 위한 개발 세션 인계 문서입니다.
 
@@ -7,86 +7,77 @@
 ## 1. 프로젝트 개요 & 핵심 철학
 
 * **프로젝트명**: Gemini C++ Modular HTS & System Trading Engine (키움 0607 / 0601 스타일)
-* **저장소 (GitHub)**: [https://github.com/hoonoh57/gemini-cpp.git](https://github.com/hoonoh57/gemini-cpp.git) (main 브랜치)
+* **저장소 (GitHub)**: `https://github.com/hoonoh57/gemini-cpp.git` (main 브랜치)
 * **언어 및 그래픽 런타임**:
-  * C++17 (MSVC x64 컴파일러 cl.exe, UTF-8 인코딩)
+  * C++17 (MSVC x64 컴파일러 `cl.exe`, UTF-8 인코딩)
   * 순수 Win32 API + Direct2D / DirectWrite 하드웨어 가속 렌더링
   * 의존성 최소화 (CRT 기본 라이브러리 및 OS 내장 DLL만 사용)
 * **LAYA & 4축 설계 원칙**:
-  1. Core Domain (축 1): 불변 도메인 모델 (Candle, StockMaster, 뷰포트 좌표계 ViewportTransform)
-  2. Addon Engine (축 2): 차트 지표 및 매매 전략 플러그인 인터페이스 (IChartAddon, DynamicTradingStrategyAddon)
-  3. Bridge/IPC (축 3): 64비트 메인 렌더러와 32비트 레거시 증권사 COM 간 분리 격리 및 IPC 파이프라인
-  4. Persistence (축 4): 뷰포트 슬롯 상태 및 사용자 전략 설정의 무손실 JSON 영속화
+  1. **Core Domain (축 1)**: 불변 도메인 모델 (`Candle`, `StockMaster`, 뷰포트 좌표계 `ViewportTransform`)
+  2. **Addon Engine (축 2)**: 차트 지표 및 매매 전략 플러그인 인터페이스 (`IChartAddon`, `DynamicTradingStrategyAddon`)
+  3. **Bridge/IPC (축 3)**: 64비트 메인 렌더러와 32비트 레거시 증권사 COM(키움 OpenAPI, 대신 Cybos Plus) 간 분리 격리 및 IPC 파이프라인
+  4. **Persistence (축 4)**: 뷰포트 슬롯 상태 및 사용자 전략 설정의 무손실 JSON 영속화
 * **개발 및 검증 파이프라인**:
   * 전체 코드 일괄 재작성을 금지하고 헤더/소스 단위 모듈화 유지
-  * PowerShell 스크립트를 통한 특정 모듈 핀포인트 생성, 패치, 무인 빌드(build.bat), 실행 검증
-  * UTF-8 인코딩 강제 ('cp949' 코덱 에러 방지, 터미널/로그 이모지 배제)
+  * PowerShell 스크립트를 통한 특정 모듈 핀포인트 생성·패치·무인 빌드(`build.bat`)·실행 검증
+  * UTF-8 인코딩 강제 (`UnicodeEncodeError: 'cp949'` 방지, 터미널 이모지 사용 배제)
+  * **무결성 원칙**: 임의의 모의/가상 데이터(`rand()` 생성 등) 사용 절대 금지. 데이터 획득 실패 시 에러 원인을 명시하고 교정할 것.
 
 ---
 
 ## 2. 64-bit / 32-bit 하이브리드 아키텍처 구조
 
 [ 64-bit Main Engine (kiwoom_modular_app.exe) ]
-+-- Direct2D / DirectWrite 고성능 차트 렌더러 (ChartCoreRenderer.hpp)
-+-- 멀티차트 분할 뷰 (1x1, 2x2, 종목별 독립 뷰포트/스크롤/줌)
-+-- 수식관리자 다이얼로그 (FormulaManagerDlg.hpp - 키움 0601 스타일)
-+-- 시스템매매 조건설정창 (StrategyConditionDlg.hpp, F9 바인딩)
-+-- CentralDataManager (데이터 캐싱 및 공급 허브)
-     ^
-     | (Named Pipes: \\.\pipe\GeminiBridgePipe, GeminiKiwoomChejanPipe 등)
-     v
+├── Direct2D / DirectWrite 고성능 차트 렌더러 (ChartCoreRenderer.hpp)
+├── 멀티차트 분할 뷰 (1x1, 2x2, 종목별 독립 뷰포트/스크롤/줌)
+├── 수식관리자 다이얼로그 (FormulaManagerDlg.hpp - 키움 0601)
+├── 시스템매매 조건설정창 (StrategyConditionDlg.hpp)
+└── CentralDataManager (데이터 캐싱 및 공급 허브)
+       ▲
+       │ (Named Pipe: \\.\pipe\GeminiBridgePipe)
+       ▼
 [ 32-bit Legacy Bridge Process (Bridge Broker) ]
-+-- Step 1 (선행): 대신증권 Cybos Plus (CpUtil.CpCybos, CpSysDib - 32-bit COM)
-+-- Step 2 (후행): 키움증권 Open API+ (KHOpenAPI.ocx - 32-bit COM)
-
-### 32비트 COM 초기화 절대 원칙 (선후 관계)
-1. 대신 Cybos Plus 검증 (선행): CpUtil.CpCybos.IsConnect == 1을 반드시 최우선으로 검증. 준비되지 않은 경우 사용자에게 재로그인 안내 메시지박스를 표시한 후 즉시 정상 종료.
-2. 키움 Open API+ 초기화 (후행): Cybos Plus가 100% 정상 연결된 경우에만 키움 로그인 및 수신 파이프라인 가동.
-3. 이 순서가 위배될 경우 두 32-bit COM 간 충돌로 인해 이후 모든 실시간/배치 IPC가 불가능해짐.
+├── 키움증권 Open API+ (KHOpenAPI.ocx, 32-bit COM)
+└── 대신증권 Cybos Plus (CpUtil, CpSysDib, 32-bit COM)
 
 ---
 
-## 3. 현재까지 구현 완료 사항 (Completed)
+## 3. 기구현 모듈 상태 & 파일 맵
 
-1. Direct2D 하드웨어 가속 렌더링 코어:
-   * 멀티슬롯(1x1, 2x2) 분할 레이아웃 엔진 완성
-   * 캔들스틱, 거래량 바 차트, 이동평균선 오버레이 렌더링
-   * 마우스 휠 줌(Zoom In/Out), 드래그 패닝(Panning), 크로스헤어 툴팁 완비
-2. 다이얼로그 시스템 모듈화:
-   * 키움 0601 스타일 수식관리자 (FormulaManagerDlg.hpp)
-   * 시스템 트레이딩 전략 조건설정창 (StrategyConditionDlg.hpp, 단축키 F9 바인딩 완료)
-3. 영속성 계층 (Persistence):
-   * 슬롯별 종목코드, 표시 봉 개수, 스크롤 오프셋의 layout_config.json 자동 저장 및 복원
-4. IPC 구조 분리 및 비동기화:
-   * ChartCoreRenderer.hpp 내 관심종목 스냅샷(RequestMarketEye), 프로그램 매매(RequestProgramTrade), 섹터 랭킹(RequestSectorRanking)의 동기 호출을 백그라운드 std::thread로 분리하여 UI 프리징 방지
-   * 에디트 컨트롤 생성 시 부모 핸들(hwnd = h) 대입 순서 교정
-5. 통합 순차 실행 파이프라인 구성:
-   * Cybos(선행 점검) -> 키움(후행 기동) -> 메인 렌더러 순차 기동 스크립트(run_all.bat) 뼈대 구축
+* **저장소 위치**: `E:\2026\gemini\gemini-cpp\`
 
----
-
-## 4. 현재 당면 과제 및 문제점 (Current Issues)
-
-1. 메인 앱(64-bit) UI 스레드 생성 블로킹 현상:
-   * 증상: kiwoom_modular_app.exe 단독 기동 시 프로세스는 정상 생성되나 MainWindowHandle이 0으로 남고 화면에 프레임이 노출되지 않음.
-   * 원인: WndProc의 WM_CREATE 메시지 핸들러가 동기 호출인데, 내부 g_Engine.Init(hwnd) 과정에서 32비트 브릿지 통신 또는 리스너 루틴이 스레드를 붙잡아 CreateWindowExW의 반환을 차단함.
-2. 브릿지 프로세스 자동 구동 및 독립 콘솔 부재:
-   * 64-bit 메인 엔진에서 32-bit 브릿지 프로세스를 직접 자식 프로세스로 분기 생성(CREATE_NEW_CONSOLE)하지 않아 브릿지가 자동으로 뜨지 않고 cmd 창이 각각 분리되지 않음.
-3. Cybos 선결 조건 미충족 시 안정적 Fallback 체계 완성 필요:
-   * Cybos Plus 미로그인 상태 시 브릿지 단에서 안내 팝업 후 안전 종료하고, 메인 렌더러는 오프라인 캐시(더미 뷰포트) 상태로 즉시 정상 노출되는 예외 처리가 통합 검증되어야 함.
+| 모듈 / 파일명 | 설계 축 | 주요 기능 및 구현 상태 |
+| :--- | :---: | :--- |
+| `ChartTypes.hpp` | 축 1 | 불변 모델 정의 (`StockMaster`, `Candle`, `SectorRankingItem`, `KiwoomOrderRequest`, `ViewportTransform` 등) |
+| `Common.hpp` | 공통 | UI 테마 색상(키움 다크/라이트 테마), 폰트 캐시, 공용 매크로 |
+| `ChartCoreRenderer.hpp` | 축 1 | Direct2D 기반 멀티 슬롯(1x1, 2x2) 렌더링, 십자선 도구, 가격/시간축 렌더러 |
+| `CentralDataManager.hpp` | 축 1 | 실시간 틱/체결 및 마스터 데이터 인메모리 관리, 증권사 브리지 IPC 수신 허브 |
+| `CybosBridge32.cpp` | 축 3 | 32비트 Cybos Plus 브리지 (`CpSysDib.CpSvrNew7043` 업종순위, `CpSysDib.StockChart` 캔들 다운로드) |
+| `KiwoomBridge32.cpp` | 축 3 | 32비트 키움 OpenAPI 브리지 (조건검색식 및 주문 발주) |
+| `build.bat` | 빌드 | 64비트 메인 엔진 컴파일 스크립트 |
+| `build_bridge32.bat` | 빌드 | 32비트 Cybos 브리지 컴파일 스크립트 |
+| `SESSION_HANDOFF.md` | 문서 | 개발 세션 연속성 유지 및 아키텍처 인계 명세서 |
 
 ---
 
-## 5. 향후 작업 로드맵 (Next Action Items)
+## 4. 직전 진행 단계 및 확인된 사실 (Fact Log)
 
-1. 메인 GUI 스레드 완전 넌블로킹 보장:
-   * main.cpp의 WM_CREATE 처리를 0ms 즉각 반환으로 전환하여 창 생성(CreateWindowExW) 및 화면 노출(ShowWindow)을 최우선 완료.
-   * Direct2D 렌더 타깃 생성 및 리소스 초기화 완료 후 첫 프레임 강제 갱신(InvalidateRect).
-   * 브릿지 미응답 시에도 더미/오프라인 모드로 즉시 진입하여 빈 차트 그리드를 정상 렌더링.
-2. 32비트 브릿지 프로세스 라이프사이클 관리자 구축:
-   * 64비트 메인 엔진에서 CREATE_NEW_CONSOLE 속성으로 CybosBridge32.exe 및 KiwoomBridge32.exe를 순차 기동하는 프로세스 관리 루틴 연동.
-   * Cybos 연결 성공 확인 이벤트(또는 파이프 신호) 수신 후 키움 브릿지 구동.
-3. 실시간 패킷 수신 및 멀티 슬롯 동기화:
-   * Cybos Plus 시세 틱 수신(RealTickPacket) 및 키움 체결/조건검색 패킷(KiwoomChejanPacket, KiwoomConditionRealPacket) 렌더링 갱신 연결.
-4. 시스템 매매 모듈 실주문 IPC 연동:
-   * 조건설정창(F9)에서 확정된 전략 파라미터를 키움 브릿지 주문 파이프로 전달하는 실행 루틴 연동.
+1. Cybos 32비트 브리지 단독 검증 완료 (`CpSysDib.CpSvrNew7043` 40개 항목 수신 확인).
+2. 64비트 메인 엔진 컴파일 정합성 완료 (와이드 문자열 및 콜백 구조체 일치).
+3. 런처와 브리지 간 Named Pipe 생성 동기화 확인.
+4. **해결 대상 결함 확인**:
+   - `ChartCoreRenderer.hpp`: 십자선 하단 가로축 일시(Date/Time) 툴팁 및 X축 날짜 눈금 렌더링 누락.
+   - `CentralDataManager.hpp`: `rand()` 기반 가상 데이터 전면 제거 및 `CpSysDib.StockChart` 실제 데이터 파이프라인 안착 필요.
+   - 실패 시 가상 데이터로 우회하지 않고 실패 원인 로깅 및 교정 원칙 준수.
+
+---
+
+## 5. 향후 작업 로드맵 (Next Action Plan)
+
+1. **GitHub 동기화 완료**: 현재 인계 문서와 최신 로컬 코드를 원격 저장소에 완벽 동기화.
+2. **동기화된 기준 코드 검증**:
+   - `git diff` 및 저장소 기준으로 `ChartCoreRenderer.hpp` 십자선 날짜 표시 로직 확인.
+   - `CentralDataManager.hpp`의 난수 발생 로직을 원격 기준선에서 제거하고 에러 리포팅 구조로 교정.
+3. **Cybos StockChart TR 파이프라인 개통**:
+   - `CybosBridge32.cpp`에서 실제 종목별 캔들을 조회하여 파이프로 전송.
+   - 메인 엔진에서 수신하여 화면에 실제 일봉 데이터 및 날짜 렌더링.
