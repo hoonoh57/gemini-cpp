@@ -1,7 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <string>
-#include "DynamicTradingStrategyAddon.hpp"
+#include "ChartTypes.hpp"
 
 class StrategyConditionDlg {
 private:
@@ -73,7 +73,8 @@ private:
 
         if (m_pStrategyAddon && m_pStrategyAddon->IsAutoOrderEnabled()) {
             SendMessageW(m_hChkAutoOrder, BM_SETCHECK, BST_CHECKED, 0);
-            SetWindowTextW(m_hEditQty, std::to_wstring(m_pStrategyAddon->GetDefaultQty()).c_str());
+            std::wstring qtyStr = std::to_wstring(m_pStrategyAddon->GetDefaultQty());
+            SetWindowTextW(m_hEditQty, qtyStr.c_str());
         }
     }
 
@@ -100,7 +101,6 @@ private:
                 GetWindowTextW(m_hEditQty, qtyBuf, 16);
                 uint32_t qty = static_cast<uint32_t>(_wtoi(qtyBuf));
                 if (qty == 0) qty = 10;
-
                 if (m_pStrategyAddon) {
                     m_pStrategyAddon->SetAutoOrder(isChecked, qty);
                 }

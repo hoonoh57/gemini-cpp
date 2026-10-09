@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #ifndef WM_USER_CHEJAN
 #define WM_USER_CHEJAN      (WM_USER + 102)
 #endif
@@ -18,7 +18,7 @@ inline HWND g_hStrategyDlg = nullptr;
 inline void ShowStrategyConditionDialog(const std::wstring& stock_name, const std::wstring& strat_name) {
     if (!g_hStrategyDlg) {
         WNDCLASSW wc{};
-        wc.lpfnWndProc = StrategyCondDlgProc;
+// [LEGACY CLEANUP]         wc.lpfnWndProc = StrategyCondDlgProc;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"KiwoomStrategyCondDlgClass_Sep";
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -169,7 +169,7 @@ public:
         const wchar_t* codes[] = { L"A000660", L"A005930", L"A028050", L"A047810" };
         for (int i = 0; i < 4; ++i) {
             ChartSlotState s; s.code = codes[i];
-            s.addons.push_back(std::make_shared<DynamicTradingStrategyAddon>(g_ActiveConfig, 5, 20));
+// [LEGACY CLEANUP]             s.addons.push_back(std::make_shared<DynamicTradingStrategyAddon>(g_ActiveConfig, 5, 20));
             slots.push_back(s);
         }
 
@@ -480,7 +480,7 @@ public:
                 for (const auto& a : slots[i].addons) {
                     if (a->GetId() == L"DYNAMIC_STRATEGY") { sname = a->GetName(); break; }
                 }
-                ShowStrategyConditionDialog(master.name, sname);
+                StrategyConditionDlg::Instance().Show(hwnd);
                 return;
             }
         }
@@ -500,10 +500,10 @@ public:
 
         auto master = CentralDataManager::Instance().GetMaster(slots[active_slot].code);
         if (cmd == 8001) ShowFormulaManagerDialog();
-        else if (cmd == 8002) ShowStrategyConditionDialog(master.name, g_ActiveConfig.strategy_name);
+        else if (cmd == 8002) StrategyConditionDlg::Instance().Show(hwnd);
         else if (cmd == 8003) {
             slots[active_slot].addons.clear();
-            slots[active_slot].addons.push_back(std::make_shared<DynamicTradingStrategyAddon>(g_ActiveConfig, 5, 20));
+// [LEGACY CLEANUP]             slots[active_slot].addons.push_back(std::make_shared<DynamicTradingStrategyAddon>(g_ActiveConfig, 5, 20));
             const auto& c = CentralDataManager::Instance().GetCandles(slots[active_slot].code);
             slots[active_slot].addons.back()->OnUpdate(c);
             InvalidateRect(hwnd, nullptr, FALSE);

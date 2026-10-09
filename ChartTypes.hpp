@@ -1,4 +1,4 @@
-﻿#include <cstdint>
+#include <cstdint>
 #include <string>
 #pragma pack(push, 1)
 struct PipeHeader {
@@ -199,6 +199,11 @@ public:
 
 class DynamicTradingStrategyAddon : public IChartAddon {
 public:
+    bool m_autoOrderEnabled = false;
+    uint32_t m_defaultQty = 10;
+    void SetAutoOrder(bool enable, uint32_t qty = 10) { m_autoOrderEnabled = enable; m_defaultQty = qty; }
+    bool IsAutoOrderEnabled() const { return m_autoOrderEnabled; }
+    uint32_t GetDefaultQty() const { return m_defaultQty; }
     StrategyConfig cfg;
     int p1 = 5, p2 = 20;
     bool enabled = true;
