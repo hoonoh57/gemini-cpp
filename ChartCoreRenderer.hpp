@@ -188,6 +188,9 @@ public:
             PostMessage(targetHwnd, WM_USER_CONDITION, (WPARAM)pCond, 0);
         });
         CentralDataManager::Instance().StartConditionListener();
+        // Cybos 배치 스냅샷 초기 요청 (관심 종목)
+        std::vector<std::wstring> watchList = { L"A005930", L"A000660" };
+        m_marketEyeSnapshot = CentralDataManager::Instance().RequestMarketEye(watchList);
         CentralDataManager::Instance().SetTickCallback([this](const std::wstring& code) {
             for (const auto& s : slots) {
                 if (s.code == code) {
