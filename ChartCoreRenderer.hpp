@@ -52,6 +52,7 @@ private:
     std::vector<MarketEyeItem> m_marketEyeSnapshot;
         // Cybos 프로그램 매매 추이 버퍼
     std::vector<ProgramTradeItem> m_programTradeData;
+    std::vector<SectorRankingItem> m_sectorRankings;
 public:
     std::wstring status_msg = L"[READY] Standby";
     bool status_is_error = false;
@@ -197,6 +198,7 @@ public:
         m_marketEyeSnapshot = CentralDataManager::Instance().RequestMarketEye(watchList);
         // Cybos 프로그램 순매수 추이 초기 요청 (삼성전자 기준 60건)
         m_programTradeData = CentralDataManager::Instance().RequestProgramTrade(L"A005930", 60);
+        m_sectorRankings = CentralDataManager::Instance().RequestSectorRanking();
         CentralDataManager::Instance().SetTickCallback([this](const std::wstring& code) {
             for (const auto& s : slots) {
                 if (s.code == code) {
